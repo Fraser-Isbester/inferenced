@@ -78,15 +78,29 @@ type Storage struct {
 type Enforcement struct {
 	// Enabled turns spend enforcement on. Enforcement requires the ledger.
 	Enabled bool `yaml:"enabled"`
-	// Action selects the over-limit behavior: "block" (the default) or "warn".
+	// Action selects the enforcement mode: "block" (the default) applies each
+	// limit's block/downgrade thresholds, while "warn" is a dry run that only
+	// logs the intended action and forwards every request unchanged.
 	Action string `yaml:"action"`
 	// BlockStatus is the HTTP status returned when blocking. Defaults to 402
 	// (Payment Required) — coding agents read that as a quota/billing error
 	// rather than an auth failure (401/403 make Claude Code prompt /login) or a
 	// retryable one (429).
 	BlockStatus int `yaml:"block_status"`
+	// Downgrade is the ordered model-downgrade map used when a limit crosses its
+	// downgrade threshold. The first rule whose match is a substring of the
+	// request model determines the replacement model.
+	Downgrade []DowngradeRuleYAML `yaml:"downgrade"`
 	// Limits is the set of spend limits to evaluate on every request.
 	Limits []LimitYAML `yaml:"limits"`
+}
+
+// DowngradeRuleYAML is the YAML shape of a single model-downgrade rule.
+type DowngradeRuleYAML struct {
+	// Match is a substring tested (case-insensitively) against the request model.
+	Match string `yaml:"match"`
+	// To is the replacement model id, e.g. "claude-sonnet-4-5".
+	To string `yaml:"to"`
 }
 
 // LimitYAML is the YAML shape of a single spend limit.
@@ -100,8 +114,14 @@ type LimitYAML struct {
 	// Window is the rolling-window duration (e.g. "168h"); required only when
 	// Period is "rolling".
 	Window string `yaml:"window"`
-	// LimitUSD is the spend ceiling in US dollars.
+	// LimitUSD is the reference budget in US dollars.
 	LimitUSD float64 `yaml:"limit_usd"`
+	// DowngradeAt is the fraction of LimitUSD at or above which requests are
+	// model-downgraded (e.g. 0.8 for 80%). Omit or 0 to never downgrade.
+	DowngradeAt float64 `yaml:"downgrade_at"`
+	// BlockAt is the fraction of LimitUSD at or above which requests are blocked
+	// (e.g. 1.2 for 120%). Omit or 0 to block at 100% of the budget.
+	BlockAt float64 `yaml:"block_at"`
 }
 
 // Developer holds identity attribution overrides.
@@ -291,15 +311,49 @@ func (c *Config) EnforceLimits() ([]enforce.Limit, error) {
 			window = d
 		}
 
+		if l.DowngradeAt < 0 || l.BlockAt < 0 {
+			return nil, fmt.Errorf("limit %d: downgrade_at and block_at must be non-negative", i)
+		}
+		if l.DowngradeAt > 0 {
+			blockAt := l.BlockAt
+			if blockAt <= 0 {
+				blockAt = 1.0
+			}
+			if l.DowngradeAt >= blockAt {
+				return nil, fmt.Errorf("limit %d: downgrade_at (%g) must be less than block_at (%g) or it never triggers", i, l.DowngradeAt, blockAt)
+			}
+		}
+
 		limits = append(limits, enforce.Limit{
-			Scope:    enforce.Scope(l.Scope),
-			ID:       l.ID,
-			Period:   enforce.Period(l.Period),
-			Window:   window,
-			LimitUSD: l.LimitUSD,
+			Scope:       enforce.Scope(l.Scope),
+			ID:          l.ID,
+			Period:      enforce.Period(l.Period),
+			Window:      window,
+			LimitUSD:    l.LimitUSD,
+			DowngradeAt: l.DowngradeAt,
+			BlockAt:     l.BlockAt,
 		})
 	}
+
+	for i, r := range c.Enforcement.Downgrade {
+		if (r.Match == "") != (r.To == "") {
+			return nil, fmt.Errorf("downgrade rule %d: both match and to are required", i)
+		}
+	}
 	return limits, nil
+}
+
+// DowngradeRules maps the configured downgrade entries into enforce.Rule values,
+// skipping any fully empty entry. EnforceLimits validates the entries.
+func (c *Config) DowngradeRules() []enforce.Rule {
+	rules := make([]enforce.Rule, 0, len(c.Enforcement.Downgrade))
+	for _, r := range c.Enforcement.Downgrade {
+		if r.Match == "" || r.To == "" {
+			continue
+		}
+		rules = append(rules, enforce.Rule{Match: r.Match, To: r.To})
+	}
+	return rules
 }
 
 // EnforceAction returns the configured over-limit action, defaulting to block.

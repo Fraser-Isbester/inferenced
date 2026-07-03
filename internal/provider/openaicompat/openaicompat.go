@@ -88,6 +88,11 @@ func (compatProvider) NewStreamParser(contentType string) provider.StreamParser 
 	return openaiwire.NewParser(contentType)
 }
 
+// RewriteModel sets the JSON body "model" field to newModel for down-scoping.
+func (compatProvider) RewriteModel(_ *http.Request, body []byte, newModel string) ([]byte, error) {
+	return openaiwire.RewriteModel(body, newModel)
+}
+
 // Price returns the configured cost, matching the model by substring and
 // falling back to the "default" entry, or $0 when no pricing is configured.
 func (p compatProvider) Price(model string, inTok, outTok int) float64 {

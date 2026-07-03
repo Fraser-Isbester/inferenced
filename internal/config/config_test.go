@@ -122,6 +122,59 @@ enforcement:
 	})
 })
 
+var _ = Describe("downgrade configuration", func() {
+	writeConfig := func(body string) string {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "inferenced.yaml")
+		Expect(os.WriteFile(path, []byte(body), 0o600)).To(Succeed())
+		return path
+	}
+
+	It("parses per-limit thresholds and downgrade rules", func() {
+		path := writeConfig(`
+enforcement:
+  enabled: true
+  downgrade:
+    - { match: opus, to: claude-sonnet-4-5 }
+    - { match: sonnet, to: claude-haiku-4-5 }
+  limits:
+    - { scope: team, id: team-a, period: day, limit_usd: 100, downgrade_at: 0.8, block_at: 1.2 }
+    - { scope: team, id: team-b, period: day, limit_usd: 100 }
+`)
+		cfg, err := config.Load(path)
+		Expect(err).NotTo(HaveOccurred())
+
+		limits, err := cfg.EnforceLimits()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(limits).To(HaveLen(2))
+		Expect(limits[0].DowngradeAt).To(Equal(0.8))
+		Expect(limits[0].BlockAt).To(Equal(1.2))
+		Expect(limits[1].DowngradeAt).To(BeZero())
+		Expect(limits[1].BlockAt).To(BeZero())
+
+		rules := cfg.DowngradeRules()
+		Expect(rules).To(HaveLen(2))
+		Expect(rules[0].Match).To(Equal("opus"))
+		Expect(rules[0].To).To(Equal("claude-sonnet-4-5"))
+	})
+
+	It("rejects a limit whose downgrade_at is not below its block_at", func() {
+		cfg := &config.Config{Enforcement: config.Enforcement{
+			Limits: []config.LimitYAML{{Scope: "team", ID: "*", Period: "day", LimitUSD: 100, DowngradeAt: 1.2, BlockAt: 1.0}},
+		}}
+		_, err := cfg.EnforceLimits()
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("rejects a downgrade rule missing its target", func() {
+		cfg := &config.Config{Enforcement: config.Enforcement{
+			Downgrade: []config.DowngradeRuleYAML{{Match: "opus"}},
+		}}
+		_, err := cfg.EnforceLimits()
+		Expect(err).To(HaveOccurred())
+	})
+})
+
 var _ = Describe("StorageEnabled", func() {
 	It("defaults to true when storage is unset", func() {
 		Expect(config.Default().StorageEnabled()).To(BeTrue())

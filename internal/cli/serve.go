@@ -102,7 +102,7 @@ func runServe(configPath, port string) {
 		resolve := func(r *http.Request) (string, string) {
 			return identity.Resolve(r, cfg.Developer.ID, cfg.Developer.Team)
 		}
-		handler = enforce.Middleware(eng, resolve, reg, cfg.EnforceAction(), cfg.BlockStatus())(handler)
+		handler = enforce.Middleware(eng, resolve, reg, cfg.EnforceAction(), cfg.BlockStatus(), cfg.DowngradeRules())(handler)
 	}
 
 	srv := &http.Server{

@@ -41,6 +41,14 @@ var deploymentRe = regexp.MustCompile(`/(?:deployments|models)/([^/:?]+)`)
 // ParseRequest extracts request metadata from the body, falling back to the URL
 // path for the model when the body omits it. Malformed JSON yields a zero-value
 // RequestInfo rather than an error.
+// RewriteModel sets the top-level "model" field of an OpenAI-wire request body
+// to newModel, shared by the first-party OpenAI provider and any
+// OpenAI-compatible endpoint. Azure-style deployment-in-path routing is not
+// rewritten (the body model is the wire default).
+func RewriteModel(body []byte, newModel string) ([]byte, error) {
+	return provider.RewriteBodyModel(body, newModel)
+}
+
 func ParseRequest(r *http.Request, body []byte) provider.RequestInfo {
 	var req request
 	_ = json.Unmarshal(body, &req) // tolerate malformed JSON; use whatever decoded

@@ -282,6 +282,11 @@ var (
 
 // Price returns the approximate cost in USD for the given model and token
 // counts, matching the model family by substring.
+// RewriteModel sets the JSON body "model" field to newModel for down-scoping.
+func (anthropicProvider) RewriteModel(_ *http.Request, body []byte, newModel string) ([]byte, error) {
+	return provider.RewriteBodyModel(body, newModel)
+}
+
 func (anthropicProvider) Price(model string, inTok, outTok int) float64 {
 	m := strings.ToLower(model)
 	pr := priceDefault

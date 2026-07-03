@@ -76,6 +76,11 @@ var (
 
 // Price returns the approximate cost in USD for the given model and token
 // counts, matching the model by substring.
+// RewriteModel sets the JSON body "model" field to newModel for down-scoping.
+func (openaiProvider) RewriteModel(_ *http.Request, body []byte, newModel string) ([]byte, error) {
+	return openaiwire.RewriteModel(body, newModel)
+}
+
 func (openaiProvider) Price(model string, inTok, outTok int) float64 {
 	m := strings.ToLower(model)
 	pr := priceDefault

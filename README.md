@@ -164,19 +164,28 @@ storage:
 
 enforcement:
   enabled: true          # evaluate the limits below on every request
-  action: block          # "block" (reject with a provider-shaped error) or "warn" (log only)
+  action: block          # "block" enforces thresholds; "warn" is a dry run (log only)
   block_status: 402      # HTTP status when blocking (default 402 Payment Required)
+  downgrade:             # model down-scoping map (first substring match wins)
+    - { match: opus,   to: claude-sonnet-4-5 }
+    - { match: sonnet, to: claude-haiku-4-5 }
   limits:
-    - { scope: developer, id: "*",      period: day,     limit_usd: 5 }
-    - { scope: team,      id: platform, period: month,   limit_usd: 500 }
-    - { scope: team,      id: "*",      period: rolling, window: 168h, limit_usd: 1000 }
+    # team-a: down-scope models at 80% of budget, hard-block at 120%.
+    - { scope: team, id: team-a, period: day,   limit_usd: 100, downgrade_at: 0.8, block_at: 1.2 }
+    # team-b: never downgraded, simply blocked at 100%.
+    - { scope: team, id: team-b, period: month, limit_usd: 500 }
+    - { scope: developer, id: "*", period: day, limit_usd: 5 }
 ```
 
 - **Scope** is `developer` or `team`; `id: "*"` matches everyone in that scope, otherwise the limit applies only to the named developer/team.
 - **Period** is `day`, `month`, or `rolling`. `day` and `month` reset at the local calendar boundary; `rolling` sums spend over a trailing `window` (any Go duration, e.g. `168h`) and is **required** for rolling limits.
-- A request is over the limit once cumulative spend for the period **reaches** `limit_usd`.
+- `limit_usd` is the reference budget. **Thresholds are fractions of it and fully per-limit**, so the policy is rule-based: `downgrade_at` (e.g. `0.8`) is where the model is down-scoped, `block_at` (e.g. `1.2`, default `1.0`) is where the request is blocked. Omitting `downgrade_at` means the limit only ever blocks.
 
-When a limit is exceeded and `action: block`, the request is denied (never forwarded) with a **provider-shaped error envelope** so the calling client surfaces a native, non-retriable error. The status defaults to **402 Payment Required** (`block_status`), which coding agents read as a quota/billing stop — deliberately **not** 401/403 (Claude Code maps those to "run `/login`") or 429 (treated as retryable rate-limiting). The error type is mapped per provider for a 402 budget block (Anthropic `invalid_request_error`, OpenAI `insufficient_quota`, Gemini `FAILED_PRECONDITION`). With `action: warn`, the request is allowed and a `[LIMIT] warn` line is logged. Enabling enforcement automatically starts the ledger even if `storage.enabled` is false, since enforcement reads from it. Spend-query failures **fail open** (the request is allowed) so a ledger hiccup never blocks a developer.
+**Downgrade** (model failover): when a limit crosses `downgrade_at` (but is still under `block_at`), inferenced rewrites the request's model in-flight to the target of the first matching `downgrade` rule — the JSON `model` field for Anthropic/OpenAI/Ollama, or the URL path for Gemini — and forwards it. The downgraded request is metered under the cheaper model. Block always wins over downgrade, and a rewrite that can't be applied (no matching rule, parse error) forwards the request unchanged rather than dropping it.
+
+**Block:** when a limit reaches `block_at` and `action: block`, the request is denied (never forwarded) with a **provider-shaped error envelope** so the calling client surfaces a native, non-retriable error. The status defaults to **402 Payment Required** (`block_status`), which coding agents read as a quota/billing stop — deliberately **not** 401/403 (Claude Code maps those to "run `/login`") or 429 (treated as retryable rate-limiting). The error type is mapped per provider for a 402 budget block (Anthropic `invalid_request_error`, OpenAI `insufficient_quota`, Gemini `FAILED_PRECONDITION`).
+
+With `action: warn`, nothing is enforced — every block/downgrade intent is logged (`[LIMIT] warn …`) and the request forwarded unchanged, so you can dry-run a policy. Enabling enforcement automatically starts the ledger even if `storage.enabled` is false, since enforcement reads from it. Spend-query failures **fail open** (the request is allowed) so a ledger hiccup never blocks a developer.
 
 ## Development
 
@@ -194,9 +203,8 @@ task run -- serve --port=8766
 
 - Telemetry control plane: ingest events, aggregate spend, push policy/config down to each gateway.
 - Transparent interception: JAMF-pushed binary + local DNS map (no per-user `*_BASE_URL` env override).
-- Cost management: per-person / per-team spend limits and enforcement.
-- Dynamic model selection: policy-driven downgrades (e.g. Opus → Sonnet over a spend threshold).
 - Productivity signals: correlate AI usage with commits / PRs.
+- Local web dashboard (`inferenced ui`): realtime telemetry, spend, and editable config.
 
 ## License
 

@@ -2,8 +2,10 @@ package enforce_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,6 +212,53 @@ type boomError struct{}
 
 func (*boomError) Error() string { return "boom" }
 
+var _ = Describe("Engine.Check downgrade thresholds", func() {
+	now := time.Date(2026, time.July, 2, 15, 30, 0, 0, time.UTC)
+	tiered := []enforce.Limit{{
+		Scope: enforce.ScopeTeam, ID: "*", Period: enforce.PeriodDay,
+		LimitUSD: 100.0, DowngradeAt: 0.8, BlockAt: 1.2,
+	}}
+
+	check := func(spent float64) enforce.Decision {
+		eng := enforce.NewEngine(tiered, func(string, string, time.Time) (float64, error) {
+			return spent, nil
+		}, fixedClock(now))
+		return eng.Check("dev-1", "team-a")
+	}
+
+	It("allows unchanged below the downgrade threshold", func() {
+		d := check(79.0)
+		Expect(d.Allowed).To(BeTrue())
+		Expect(d.Downgrade).To(BeFalse())
+	})
+
+	It("flags downgrade between the downgrade and block thresholds", func() {
+		d := check(90.0)
+		Expect(d.Allowed).To(BeTrue())
+		Expect(d.Downgrade).To(BeTrue())
+		Expect(d.Limit).NotTo(BeNil())
+		Expect(d.SpentUSD).To(Equal(90.0))
+	})
+
+	It("blocks at or above the block threshold", func() {
+		d := check(120.0)
+		Expect(d.Allowed).To(BeFalse())
+		Expect(d.Downgrade).To(BeFalse())
+	})
+
+	It("lets a blocking limit win over a downgrading one regardless of order", func() {
+		limits := []enforce.Limit{
+			{Scope: enforce.ScopeDeveloper, ID: "*", Period: enforce.PeriodDay, LimitUSD: 100, DowngradeAt: 0.8, BlockAt: 1.2},
+			{Scope: enforce.ScopeTeam, ID: "*", Period: enforce.PeriodDay, LimitUSD: 10}, // blocks at $10
+		}
+		eng := enforce.NewEngine(limits, func(string, string, time.Time) (float64, error) {
+			return 90.0, nil // 90 downgrades limit 1, and is >= $10 block on limit 2
+		}, fixedClock(now))
+		d := eng.Check("dev-1", "team-a")
+		Expect(d.Allowed).To(BeFalse())
+	})
+})
+
 var _ = Describe("Middleware", func() {
 	now := time.Date(2026, time.July, 2, 15, 30, 0, 0, time.UTC)
 
@@ -236,7 +285,7 @@ var _ = Describe("Middleware", func() {
 			return 99.0, nil
 		}, fixedClock(now))
 
-		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionBlock, http.StatusPaymentRequired)(inner)
+		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionBlock, http.StatusPaymentRequired, nil)(inner)
 		req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -263,7 +312,7 @@ var _ = Describe("Middleware", func() {
 			return 99.0, nil
 		}, fixedClock(now))
 
-		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionWarn, http.StatusPaymentRequired)(innerH)
+		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionWarn, http.StatusPaymentRequired, nil)(innerH)
 		req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -282,7 +331,7 @@ var _ = Describe("Middleware", func() {
 			return 0.0, nil
 		}, fixedClock(now))
 
-		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionBlock, http.StatusPaymentRequired)(innerH)
+		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionBlock, http.StatusPaymentRequired, nil)(innerH)
 		req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -297,7 +346,7 @@ var _ = Describe("Middleware", func() {
 			return 99.0, nil
 		}, fixedClock(now))
 
-		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionBlock, http.StatusPaymentRequired)(inner)
+		h := enforce.Middleware(eng, resolve, newReg(), enforce.ActionBlock, http.StatusPaymentRequired, nil)(inner)
 		// A host/path that no registered provider recognizes.
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/nope", nil)
 		rec := httptest.NewRecorder()
@@ -308,5 +357,81 @@ var _ = Describe("Middleware", func() {
 		var body map[string]string
 		Expect(json.Unmarshal(rec.Body.Bytes(), &body)).To(Succeed())
 		Expect(body["error"]).To(ContainSubstring("inferenced:"))
+	})
+
+	Describe("downgrade", func() {
+		// A limit that downgrades at 80% ($8) and blocks at 120% ($12) of $10.
+		tiered := []enforce.Limit{{
+			Scope: enforce.ScopeDeveloper, ID: "*", Period: enforce.PeriodDay,
+			LimitUSD: 10.0, DowngradeAt: 0.8, BlockAt: 1.2,
+		}}
+		rules := []enforce.Rule{
+			{Match: "opus", To: "claude-sonnet-4-5"},
+			{Match: "sonnet", To: "claude-haiku-4-5"},
+		}
+
+		// serveWith runs one request body through the middleware and returns the
+		// body the inner handler received plus whether it was called.
+		serveWith := func(spent float64, action enforce.Action, reqBody string) (string, int, bool) {
+			var gotBody string
+			called := false
+			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				b, _ := io.ReadAll(r.Body)
+				gotBody = string(b)
+				w.WriteHeader(http.StatusOK)
+			})
+			eng := enforce.NewEngine(tiered, func(string, string, time.Time) (float64, error) {
+				return spent, nil
+			}, fixedClock(now))
+			h := enforce.Middleware(eng, resolve, newReg(), action, http.StatusPaymentRequired, rules)(inner)
+			req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages",
+				strings.NewReader(reqBody))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			return gotBody, rec.Code, called
+		}
+
+		It("rewrites the model to the downgrade target between the thresholds", func() {
+			body, code, called := serveWith(9.0, enforce.ActionBlock,
+				`{"model":"claude-opus-4-5","messages":[{"role":"user","content":"hi"}]}`)
+			Expect(called).To(BeTrue())
+			Expect(code).To(Equal(http.StatusOK))
+			Expect(body).To(ContainSubstring(`"model":"claude-sonnet-4-5"`))
+			Expect(body).NotTo(ContainSubstring("opus"))
+			// The rest of the request must survive the rewrite untouched.
+			Expect(body).To(ContainSubstring(`"content":"hi"`))
+		})
+
+		It("forwards unchanged below the downgrade threshold", func() {
+			body, code, called := serveWith(5.0, enforce.ActionBlock,
+				`{"model":"claude-opus-4-5"}`)
+			Expect(called).To(BeTrue())
+			Expect(code).To(Equal(http.StatusOK))
+			Expect(body).To(ContainSubstring(`"model":"claude-opus-4-5"`))
+		})
+
+		It("blocks at or above the block threshold (block wins over downgrade)", func() {
+			_, code, called := serveWith(12.0, enforce.ActionBlock,
+				`{"model":"claude-opus-4-5"}`)
+			Expect(called).To(BeFalse())
+			Expect(code).To(Equal(http.StatusPaymentRequired))
+		})
+
+		It("does not rewrite in warn mode (dry run)", func() {
+			body, code, called := serveWith(9.0, enforce.ActionWarn,
+				`{"model":"claude-opus-4-5"}`)
+			Expect(called).To(BeTrue())
+			Expect(code).To(Equal(http.StatusOK))
+			Expect(body).To(ContainSubstring(`"model":"claude-opus-4-5"`))
+		})
+
+		It("forwards unchanged when no rule matches the model", func() {
+			body, _, called := serveWith(9.0, enforce.ActionBlock,
+				`{"model":"claude-haiku-4-5"}`)
+			Expect(called).To(BeTrue())
+			// haiku matches no rule (only opus/sonnet), so it is left alone.
+			Expect(body).To(ContainSubstring(`"model":"claude-haiku-4-5"`))
+		})
 	})
 })

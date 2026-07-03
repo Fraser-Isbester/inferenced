@@ -200,6 +200,21 @@ var (
 	priceDefault = price{inPerM: 1.25, outPerM: 5.0}
 )
 
+// RewriteModel down-scopes a Gemini request by rewriting the model segment of
+// the URL path (e.g. models/gemini-1.5-pro:generateContent). The body carries no
+// model field, so it is returned unchanged. RawPath is cleared so the proxy
+// re-derives the escaped path from the updated Path.
+func (geminiProvider) RewriteModel(r *http.Request, body []byte, newModel string) ([]byte, error) {
+	if r == nil || r.URL == nil {
+		return body, nil
+	}
+	r.URL.Path = modelRe.ReplaceAllStringFunc(r.URL.Path, func(string) string {
+		return "models/" + newModel + ":"
+	})
+	r.URL.RawPath = ""
+	return body, nil
+}
+
 // Price prices Gemini pro/flash families by substring.
 func (geminiProvider) Price(model string, inTok, outTok int) float64 {
 	m := strings.ToLower(model)

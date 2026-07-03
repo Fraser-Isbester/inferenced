@@ -8,10 +8,13 @@
 package enforce
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
@@ -49,7 +52,10 @@ const (
 	ActionWarn Action = "warn"
 )
 
-// Limit describes a single spend ceiling for a scope/id over a period.
+// Limit describes a single spend ceiling for a scope/id over a period, with
+// optional per-limit downgrade and block thresholds expressed as fractions of
+// LimitUSD. This makes enforcement rule-based and dynamic: one team can downgrade
+// at 80% and block at 120% while another simply blocks at 100%.
 type Limit struct {
 	// Scope is the attribution dimension (team or developer).
 	Scope Scope
@@ -60,8 +66,43 @@ type Limit struct {
 	Period Period
 	// Window is the trailing duration used when Period is PeriodRolling.
 	Window time.Duration
-	// LimitUSD is the spend ceiling in US dollars.
+	// LimitUSD is the reference budget in US dollars; the thresholds below are
+	// fractions of it.
 	LimitUSD float64
+	// DowngradeAt is the fraction of LimitUSD at or above which requests are
+	// model-downgraded (in enforce mode). Zero disables downgrade for this limit.
+	DowngradeAt float64
+	// BlockAt is the fraction of LimitUSD at or above which requests are blocked.
+	// Zero means the default of 1.0 (block once spend reaches the budget).
+	BlockAt float64
+}
+
+// blockThreshold returns the absolute USD spend at which this limit blocks.
+func (l Limit) blockThreshold() float64 {
+	at := l.BlockAt
+	if at <= 0 {
+		at = 1.0
+	}
+	return at * l.LimitUSD
+}
+
+// downgradeThreshold returns the absolute USD spend at which this limit
+// downgrades, and whether downgrade is enabled for the limit.
+func (l Limit) downgradeThreshold() (float64, bool) {
+	if l.DowngradeAt <= 0 {
+		return 0, false
+	}
+	return l.DowngradeAt * l.LimitUSD, true
+}
+
+// Rule maps a model matcher to its downgrade target. When a request is
+// downgraded, the first rule whose Match is a substring of the request model
+// (case-insensitive) determines the replacement model.
+type Rule struct {
+	// Match is a lowercase substring tested against the request model.
+	Match string
+	// To is the replacement model id.
+	To string
 }
 
 // SpendFunc returns the total spend in US dollars for the given scope and id
@@ -70,11 +111,17 @@ type SpendFunc func(scope, id string, since time.Time) (float64, error)
 
 // Decision is the result of evaluating the configured limits for a caller.
 type Decision struct {
-	// Allowed reports whether the request should proceed.
+	// Allowed reports whether the request should proceed (possibly downgraded).
+	// It is false only when a limit's block threshold is reached.
 	Allowed bool
-	// Limit is the violated limit when Allowed is false; nil otherwise.
+	// Downgrade reports whether the request should proceed but with its model
+	// down-scoped. It is never true when Allowed is false (block wins).
+	Downgrade bool
+	// Limit is the limit that determined the outcome: the blocking limit when
+	// Allowed is false, or the first downgrade-triggering limit when Downgrade is
+	// true. Nil when the request is allowed unchanged.
 	Limit *Limit
-	// SpentUSD is the spend observed for the violated limit.
+	// SpentUSD is the spend observed for that limit.
 	SpentUSD float64
 }
 
@@ -99,13 +146,19 @@ func NewEngine(limits []Limit, spend SpendFunc, clock func() time.Time) *Engine 
 	return &Engine{limits: limits, spend: spend, clock: clock}
 }
 
-// Check evaluates every applicable limit for the given developer and team and
-// returns the first violation. A limit applies when its scope matches and its
-// id is "*" or equals the caller's id for that scope. A limit is violated when
-// observed spend is greater than or equal to its ceiling. Spend-lookup errors
-// fail open (the request is allowed) and are logged.
+// Check evaluates every applicable limit for the given developer and team. A
+// limit applies when its scope matches and its id is "*" or equals the caller's
+// id for that scope. Block always wins: if any applicable limit reaches its
+// block threshold the request is blocked; otherwise, if any limit reaches its
+// downgrade threshold, the request is allowed but flagged for model down-scoping
+// (the first such limit is reported). Spend-lookup errors fail open (that limit
+// is skipped) and are logged.
 func (e *Engine) Check(devID, team string) Decision {
 	now := e.clock()
+	var (
+		dgLimit *Limit
+		dgSpent float64
+	)
 	for i := range e.limits {
 		l := e.limits[i]
 		switch l.Scope {
@@ -121,6 +174,9 @@ func (e *Engine) Check(devID, team string) Decision {
 			// Unknown scope never applies.
 			continue
 		}
+		if l.LimitUSD <= 0 {
+			continue
+		}
 
 		start := periodStart(l, now)
 		spent, err := e.spend(string(l.Scope), l.ID, start)
@@ -129,10 +185,21 @@ func (e *Engine) Check(devID, team string) Decision {
 			log.Printf("[LIMIT] spend query error: scope=%s id=%q: %v", l.Scope, l.ID, err)
 			continue
 		}
-		if spent >= l.LimitUSD {
-			violated := l
-			return Decision{Allowed: false, Limit: &violated, SpentUSD: spent}
+
+		if spent >= l.blockThreshold() {
+			blocked := l
+			return Decision{Allowed: false, Limit: &blocked, SpentUSD: spent}
 		}
+		if dgLimit == nil {
+			if at, ok := l.downgradeThreshold(); ok && spent >= at {
+				triggered := l
+				dgLimit = &triggered
+				dgSpent = spent
+			}
+		}
+	}
+	if dgLimit != nil {
+		return Decision{Allowed: true, Downgrade: true, Limit: dgLimit, SpentUSD: dgSpent}
 	}
 	return Decision{Allowed: true}
 }
@@ -154,12 +221,17 @@ func periodStart(l Limit, now time.Time) time.Time {
 }
 
 // Middleware returns an HTTP middleware that enforces the engine's limits. For
-// each request it resolves the caller identity and checks the limits. Allowed
-// requests are forwarded. When a limit is violated and action is ActionWarn the
-// violation is logged and the request is forwarded; otherwise the request is
-// rejected with HTTP 403 and a provider-shaped JSON error body (the inner
-// handler is not invoked).
-func Middleware(e *Engine, resolve ResolveFunc, reg *provider.Registry, action Action, blockStatus int) func(http.Handler) http.Handler {
+// each request it resolves the caller identity and checks the limits.
+//
+//   - ActionWarn is a dry run: any block or downgrade intent is logged and the
+//     request is forwarded unchanged.
+//   - Otherwise (enforce mode): a blocked request is rejected with a
+//     provider-shaped error at blockStatus; a downgrade-flagged request has its
+//     model rewritten per rules and is forwarded; an allowed request is
+//     forwarded unchanged.
+//
+// rules is the ordered downgrade map (first substring match wins).
+func Middleware(e *Engine, resolve ResolveFunc, reg *provider.Registry, action Action, blockStatus int, rules []Rule) func(http.Handler) http.Handler {
 	if blockStatus == 0 {
 		blockStatus = http.StatusPaymentRequired
 	}
@@ -167,22 +239,89 @@ func Middleware(e *Engine, resolve ResolveFunc, reg *provider.Registry, action A
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			devID, team := resolve(r)
 			d := e.Check(devID, team)
-			if d.Allowed {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			msg := violationMessage(d)
 
 			if action == ActionWarn {
-				log.Printf("[LIMIT] warn %s", msg)
+				switch {
+				case !d.Allowed:
+					log.Printf("[LIMIT] warn %s", violationMessage(d))
+				case d.Downgrade:
+					log.Printf("[LIMIT] warn would downgrade: %s", violationMessage(d))
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			writeBlock(w, r, reg, msg, blockStatus)
+			if !d.Allowed {
+				writeBlock(w, r, reg, violationMessage(d), blockStatus)
+				return
+			}
+
+			if d.Downgrade {
+				applyDowngrade(r, reg, rules, d)
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// applyDowngrade rewrites the request's model to the configured downgrade target
+// before it is forwarded. It is best-effort: any failure (no provider, no
+// matching rule, read/rewrite error) forwards the request unchanged rather than
+// dropping it, since a downgrade must never break a request the budget still
+// permits.
+func applyDowngrade(r *http.Request, reg *provider.Registry, rules []Rule, d Decision) {
+	if reg == nil || len(rules) == 0 || r.Body == nil {
+		return
+	}
+	p, ok := reg.Detect(r)
+	if !ok {
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	if err != nil {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		log.Printf("[DOWNGRADE] body read error, forwarding unchanged: %v", err)
+		return
+	}
+
+	model := p.ParseRequest(r, body).Model
+	target, matched := matchRule(rules, model)
+	if !matched || target == "" || strings.EqualFold(target, model) {
+		// No applicable rule or already at the target: forward unchanged.
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		return
+	}
+
+	newBody, err := p.RewriteModel(r, body, target)
+	if err != nil {
+		log.Printf("[DOWNGRADE] rewrite %q -> %q failed, forwarding unchanged: %v", model, target, err)
+		newBody = body
+	} else {
+		log.Printf("[DOWNGRADE] %q -> %q (%s)", model, target, violationMessage(d))
+	}
+	r.Body = io.NopCloser(bytes.NewReader(newBody))
+	r.ContentLength = int64(len(newBody))
+	// Drop any stale Content-Length header; the proxy re-derives it from Body.
+	r.Header.Del("Content-Length")
+}
+
+// matchRule returns the downgrade target for a model: the To of the first rule
+// whose Match is a substring of the model (case-insensitive).
+func matchRule(rules []Rule, model string) (string, bool) {
+	m := strings.ToLower(model)
+	for _, rule := range rules {
+		if rule.Match == "" {
+			continue
+		}
+		if strings.Contains(m, strings.ToLower(rule.Match)) {
+			return rule.To, true
+		}
+	}
+	return "", false
 }
 
 // violationMessage renders the human-readable limit-exceeded message.

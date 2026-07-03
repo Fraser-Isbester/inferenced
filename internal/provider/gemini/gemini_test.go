@@ -17,6 +17,23 @@ func TestGemini(t *testing.T) {
 	RunSpecs(t, "Gemini Provider Suite")
 }
 
+var _ = Describe("RewriteModel", func() {
+	It("rewrites the model segment of the URL path and leaves the body unchanged", func() {
+		req := httptest.NewRequest("POST",
+			"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse", nil)
+		body := []byte(`{"contents":[{"parts":[{"text":"hi"}]}]}`)
+
+		out, err := gemini.New().RewriteModel(req, body, "gemini-1.5-flash")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal(body))
+		Expect(req.URL.Path).To(Equal("/v1beta/models/gemini-1.5-flash:streamGenerateContent"))
+
+		// The rewritten model is what ParseRequest now reports.
+		info := gemini.New().ParseRequest(req, body)
+		Expect(info.Model).To(Equal("gemini-1.5-flash"))
+	})
+})
+
 var _ = Describe("StreamParser", func() {
 	It("extracts the last usageMetadata from an SSE stream", func() {
 		const stream = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n" +

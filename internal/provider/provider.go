@@ -9,6 +9,8 @@
 package provider
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -74,6 +76,36 @@ type Provider interface {
 	// ErrorResponse renders a provider-native error envelope for the given HTTP
 	// status and message, returning the JSON Content-Type and marshaled body.
 	ErrorResponse(status int, message string) (contentType string, body []byte)
+	// RewriteModel reconfigures the request to use newModel, for real-time model
+	// down-scoping. It returns the body to forward: body-based providers re-encode
+	// the JSON "model" field, while path-based providers (Gemini) mutate r.URL and
+	// return the body unchanged. The original body is returned on any parse error.
+	RewriteModel(r *http.Request, body []byte, newModel string) ([]byte, error)
+}
+
+// RewriteBodyModel returns a copy of a JSON request body with its top-level
+// "model" field set to newModel, preserving every other field. It is the shared
+// implementation for body-based providers (Anthropic, OpenAI-wire, Ollama). On a
+// parse error it returns the original body unchanged alongside the error so the
+// caller can forward the request rather than drop it.
+func RewriteBodyModel(body []byte, newModel string) ([]byte, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return body, fmt.Errorf("rewrite model: parse body: %w", err)
+	}
+	if obj == nil {
+		obj = make(map[string]json.RawMessage, 1)
+	}
+	m, err := json.Marshal(newModel)
+	if err != nil {
+		return body, fmt.Errorf("rewrite model: encode model: %w", err)
+	}
+	obj["model"] = m
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body, fmt.Errorf("rewrite model: encode body: %w", err)
+	}
+	return out, nil
 }
 
 // Registry holds the set of registered providers and resolves which one should

@@ -1,6 +1,7 @@
 package anthropic_test
 
 import (
+	"encoding/json"
 	"io"
 	"strings"
 
@@ -9,6 +10,29 @@ import (
 
 	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
 )
+
+var _ = Describe("RewriteModel", func() {
+	It("replaces the model field and preserves the rest of the body", func() {
+		body := []byte(`{"model":"claude-opus-4-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+		out, err := anthropic.New().RewriteModel(nil, body, "claude-sonnet-4-5")
+		Expect(err).NotTo(HaveOccurred())
+
+		var got map[string]any
+		Expect(json.Unmarshal(out, &got)).To(Succeed())
+		Expect(got["model"]).To(Equal("claude-sonnet-4-5"))
+		Expect(got["stream"]).To(Equal(true))
+		msgs, ok := got["messages"].([]any)
+		Expect(ok).To(BeTrue())
+		Expect(msgs).To(HaveLen(1))
+	})
+
+	It("returns the original body on malformed JSON", func() {
+		body := []byte(`not json`)
+		out, err := anthropic.New().RewriteModel(nil, body, "x")
+		Expect(err).To(HaveOccurred())
+		Expect(out).To(Equal(body))
+	})
+})
 
 var _ = Describe("StreamParser", func() {
 	It("reports authoritative usage from message_start and message_delta", func() {

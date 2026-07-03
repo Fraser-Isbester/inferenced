@@ -76,28 +76,53 @@ storage:
 # enforcement is on the ledger is started automatically even if disabled above.
 enforcement:
   enabled: false   # default false; turn on to evaluate the limits below
-  action: block    # "block" (reject with a provider-shaped error) or "warn" (log only)
+  # Enforcement mode. "block" applies each limit's block/downgrade thresholds;
+  # "warn" is a dry run that only logs the intended action and forwards unchanged.
+  action: block
   # HTTP status used when blocking. Default 402 (Payment Required): coding agents
   # read it as a quota/billing stop and surface the message. Avoid 401/403 (Claude
   # Code maps those to "run /login") and 429 (treated as retryable rate-limiting).
   block_status: 402
+  # Model down-scoping map. When a limit crosses its downgrade_at threshold, the
+  # request's model is rewritten to the target of the first rule whose `match` is
+  # a substring of it (case-insensitive). Works for every provider (body model or,
+  # for Gemini, the URL path).
+  downgrade:
+    - { match: opus,   to: claude-sonnet-4-5 }
+    - { match: sonnet, to: claude-haiku-4-5 }
+    - { match: gpt-4o, to: gpt-4o-mini }
   limits:
     # Each limit applies when its scope/id matches the request's developer or
-    # team. id: "*" matches everyone in that scope. A request is blocked when
-    # cumulative spend for the period reaches limit_usd.
+    # team. id: "*" matches everyone in that scope.
     #
     # scope:  team | developer
     # period: day | month | rolling  (rolling requires `window`, a Go duration)
-    - scope: developer
-      id: "*"          # every developer gets their own $5/day budget
-      period: day
-      limit_usd: 5
+    #
+    # limit_usd is the reference budget. Thresholds are fractions of it and are
+    # fully per-limit, so policy is rule-based and dynamic:
+    #   downgrade_at: fraction at/above which the model is down-scoped (omit = never)
+    #   block_at:     fraction at/above which the request is blocked (omit = 1.0)
+    #
+    # team-a: soft-lands onto cheaper models at 80% of budget, hard-stops at 120%.
     - scope: team
-      id: platform
+      id: team-a
+      period: day
+      limit_usd: 100
+      downgrade_at: 0.8
+      block_at: 1.2
+    # team-b: never downgraded, simply blocked at 100% of its monthly budget.
+    - scope: team
+      id: team-b
       period: month
       limit_usd: 500
+    # every developer gets their own hard $5/day cap.
+    - scope: developer
+      id: "*"
+      period: day
+      limit_usd: 5
+    # any team, over a rolling 7-day window.
     - scope: team
-      id: "*"          # any team, over a rolling 7-day window
+      id: "*"
       period: rolling
       window: 168h
       limit_usd: 1000
