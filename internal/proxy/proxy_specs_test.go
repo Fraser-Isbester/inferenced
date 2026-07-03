@@ -1,6 +1,8 @@
 package proxy_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -127,5 +129,70 @@ var _ = Describe("Proxy end-to-end", func() {
 		Expect(ev.OutputTokens).To(Equal(5))
 		Expect(ev.CostUSD).To(BeNumerically(">", 0))
 		Expect(ev.TokensApproximated).To(BeFalse())
+	})
+
+	It("meters output tokens when the upstream returns a gzip-compressed stream (issue #7)", func() {
+		// Upstream compresses the SSE stream and advertises Content-Encoding: gzip,
+		// exactly as api.anthropic.com does when the client sends Accept-Encoding.
+		gzipped := func() []byte {
+			var buf bytes.Buffer
+			zw := gzip.NewWriter(&buf)
+			_, err := io.WriteString(zw, cannedStream)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(zw.Close()).To(Succeed())
+			return buf.Bytes()
+		}()
+
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The proxy must have stripped the client's Accept-Encoding; Go's
+			// Transport re-adds its own so it can transparently decompress.
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Content-Encoding", "gzip")
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write(gzipped)
+			Expect(err).NotTo(HaveOccurred())
+		}))
+		defer upstream.Close()
+
+		upURL, err := url.Parse(upstream.URL)
+		Expect(err).NotTo(HaveOccurred())
+
+		reg := provider.NewRegistry()
+		reg.Register(anthropic.New())
+
+		sink := &capturingSink{}
+		rp := proxy.New(reg, sink, proxy.Options{})
+		rp.Transport = &redirectTransport{target: upURL, base: http.DefaultTransport}
+
+		proxySrv := httptest.NewServer(rp)
+		defer proxySrv.Close()
+
+		reqBody := `{"model":"claude-3-5-sonnet","stream":true,` +
+			`"messages":[{"role":"user","content":"Hi"}]}`
+		req, err := http.NewRequest(http.MethodPost, proxySrv.URL+"/v1/messages",
+			strings.NewReader(reqBody))
+		Expect(err).NotTo(HaveOccurred())
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", "sk-ant-test-secret")
+		req.Header.Set("anthropic-version", "2023-06-01")
+		// Simulate a coding agent that requests compression.
+		req.Header.Set("Accept-Encoding", "gzip")
+
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		got, err := io.ReadAll(resp.Body)
+		Expect(err).NotTo(HaveOccurred())
+		// Client receives the decompressed stream (bandwidth is irrelevant locally).
+		Expect(string(got)).To(Equal(cannedStream))
+
+		Eventually(func() bool { _, ok := sink.last(); return ok }).Should(BeTrue())
+		ev, _ := sink.last()
+		// The regression: output tokens must be metered, not zero.
+		Expect(ev.OutputTokens).To(Equal(5))
+		Expect(ev.InputTokens).To(Equal(10))
+		Expect(ev.CostUSD).To(BeNumerically(">", 0))
 	})
 })

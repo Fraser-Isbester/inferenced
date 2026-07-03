@@ -46,6 +46,25 @@ providers:
         default: { input_per_1m: 0.20, output_per_1m: 0.20 }
         llama-3.1-70b: { input_per_1m: 0.90, output_per_1m: 0.90 }
 
+# Model pricing. Cost is resolved in layers, highest priority first:
+#   1. a custom price sheet (`pricing.sheet`), when set,
+#   2. live prices fetched on boot from models.dev (cached to disk),
+#   3. inferenced's embedded family defaults,
+#   4. each provider's built-in price.
+# There is no first-party per-provider pricing API, so "live" prices come from
+# the community-maintained models.dev aggregate. Setting a custom sheet is
+# treated as authoritative and skips the live fetch (embedded defaults still
+# backfill any model the sheet omits).
+pricing:
+  # Path to a custom price sheet (YAML or JSON). Same schema as a provider's
+  # `pricing` block: provider -> (model substring | "default") -> per-1M price.
+  # sheet: "/etc/inferenced/prices.yaml"
+  remote:
+    enabled: true                     # default true; false = embedded defaults only
+    # url: "https://models.dev/api.json"
+    ttl: "24h"                        # cache freshness window (any Go duration)
+    # cache_path: ""                  # empty -> $XDG_CACHE_HOME/inferenced/pricing.json
+
 # Local spend ledger. Every metered request is persisted to a pure-Go SQLite
 # database (no CGO), which powers the enforcement engine below.
 storage:

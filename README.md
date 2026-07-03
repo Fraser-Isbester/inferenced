@@ -4,7 +4,7 @@
 
 `inferenced` sits between a developer's coding agent (Claude Code, Cursor, aider, an OpenAI-compatible client, …) and the upstream LLM API. It forwards traffic unchanged while **teeing** the streamed response to meter token usage and cost, then emits a structured telemetry event — all without buffering the response or adding perceivable latency.
 
-> **Status:** early spike. The metering core and provider seam are working; the control plane, transparent interception, and cost enforcement are on the roadmap.
+> **Status:** early spike. The metering core, provider seam, layered pricing (live + custom sheets), and local spend enforcement are working; the control plane and transparent interception are on the roadmap.
 
 ## How it works
 
@@ -119,6 +119,38 @@ providers:
     - { name: openrouter, host: openrouter.ai, base_path: /api/v1 }
     - { name: vllm-local, host: "localhost:8000", scheme: http }
 ```
+
+## Pricing
+
+Cost is resolved in layers, highest priority first:
+
+1. a **custom price sheet** (`pricing.sheet`) — authoritative when set,
+2. **live prices** fetched on boot from [models.dev](https://models.dev) and cached to disk with a TTL,
+3. inferenced's **embedded family defaults** (bundled in the binary),
+4. each provider's **built-in price** (final fallback).
+
+There is no first-party per-provider pricing API, so "live" prices come from the community-maintained **models.dev** aggregate (`https://models.dev/api.json`). The fetch happens once at startup behind a 24h disk cache and **degrades gracefully** — a network failure falls back to the last cached copy, then to the embedded defaults, and never blocks the gateway from starting. Setting a custom sheet is treated as authoritative and skips the live fetch (the embedded defaults still backfill any model the sheet omits).
+
+A custom sheet is YAML or JSON with the same shape as a provider's inline `pricing` block — `provider → (model substring | "default") → per-1M price`:
+
+```yaml
+# prices.yaml
+anthropic:
+  default: { input_per_1m: 3.0,  output_per_1m: 15.0 }
+  opus:    { input_per_1m: 15.0, output_per_1m: 75.0 }
+openai:
+  gpt-4o-mini: { input_per_1m: 0.15, output_per_1m: 0.60 }
+```
+
+```yaml
+pricing:
+  sheet: "/etc/inferenced/prices.yaml"   # optional; skips the live fetch
+  remote:
+    enabled: true                        # default; false = embedded defaults only
+    ttl: "24h"
+```
+
+Model matching is case-insensitive and picks the **longest** substring match (so `gpt-4o-mini` beats `gpt-4o`), falling back to the provider's `default` entry.
 
 ## Enforcement & local spend ledger
 

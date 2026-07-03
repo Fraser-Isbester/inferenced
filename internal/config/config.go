@@ -36,6 +36,33 @@ type Config struct {
 	Providers   Providers   `yaml:"providers"`
 	Storage     Storage     `yaml:"storage"`
 	Enforcement Enforcement `yaml:"enforcement"`
+	Pricing     Pricing     `yaml:"pricing"`
+}
+
+// Pricing configures how model prices are resolved. Resolution is layered:
+// a custom Sheet (if set) wins, then the live models.dev sheet, then the
+// embedded defaults, then each provider's built-in price.
+type Pricing struct {
+	// Sheet is the path to a custom price sheet (YAML or JSON). When set, the
+	// live remote fetch is skipped — the custom sheet is treated as
+	// authoritative, with the embedded defaults as the only fallback.
+	Sheet string `yaml:"sheet"`
+	// Remote configures the boot-time live price fetch from models.dev.
+	Remote Remote `yaml:"remote"`
+}
+
+// Remote configures the live pricing fetch performed at startup.
+type Remote struct {
+	// Enabled toggles the live fetch. A nil value means enabled (the default);
+	// set it to false to rely solely on the embedded defaults (and custom sheet).
+	Enabled *bool `yaml:"enabled"`
+	// URL overrides the pricing source; empty uses the models.dev default.
+	URL string `yaml:"url"`
+	// TTL is the cache freshness window (e.g. "24h"); empty uses the default.
+	TTL string `yaml:"ttl"`
+	// CachePath overrides where the fetched sheet is cached; empty uses the
+	// default XDG cache location.
+	CachePath string `yaml:"cache_path"`
 }
 
 // Storage configures the local SQLite spend ledger.
@@ -282,6 +309,25 @@ func (c *Config) EnforceAction() enforce.Action {
 		return enforce.ActionBlock
 	}
 	return enforce.Action(c.Enforcement.Action)
+}
+
+// RemoteEnabled reports whether the live models.dev price fetch should run. It
+// is on unless Pricing.Remote.Enabled is explicitly set to false.
+func (c *Config) RemoteEnabled() bool {
+	return enabled(c.Pricing.Remote.Enabled)
+}
+
+// RemoteTTL returns the configured cache freshness window, or zero when unset
+// (callers substitute the package default). A malformed duration is an error.
+func (c *Config) RemoteTTL() (time.Duration, error) {
+	if c.Pricing.Remote.TTL == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.Pricing.Remote.TTL)
+	if err != nil {
+		return 0, fmt.Errorf("parse pricing.remote.ttl %q: %w", c.Pricing.Remote.TTL, err)
+	}
+	return d, nil
 }
 
 // BlockStatus returns the HTTP status used when blocking, defaulting to 402.

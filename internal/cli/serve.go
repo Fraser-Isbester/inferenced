@@ -15,6 +15,7 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/enforce"
 	"github.com/Fraser-Isbester/inferenced/internal/identity"
+	"github.com/Fraser-Isbester/inferenced/internal/pricing"
 	"github.com/Fraser-Isbester/inferenced/internal/proxy"
 	"github.com/Fraser-Isbester/inferenced/internal/store"
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
@@ -82,10 +83,13 @@ func runServe(configPath, port string) {
 		sinks = append(sinks, st)
 	}
 
+	resolver := buildPriceResolver(cfg)
+
 	sink := telemetry.MultiSink(sinks...)
 	rp := proxy.New(reg, sink, proxy.Options{
 		DeveloperID: cfg.Developer.ID,
 		Team:        cfg.Developer.Team,
+		Pricing:     resolver,
 	})
 
 	var handler http.Handler = rp
@@ -129,4 +133,48 @@ func runServe(configPath, port string) {
 			log.Printf("graceful shutdown failed: %v", err)
 		}
 	}
+}
+
+// buildPriceResolver assembles the layered price resolver: a custom sheet (if
+// configured) has priority, otherwise the live models.dev sheet is fetched on
+// boot; the embedded defaults are always the final fallback. A custom sheet
+// deliberately suppresses the live fetch, matching "pull prices live unless a
+// custom sheet is present". Live-fetch failures degrade to the embedded
+// defaults and never block startup; a misconfigured custom sheet is fatal.
+func buildPriceResolver(cfg *config.Config) *pricing.Resolver {
+	var layers []*pricing.Sheet
+
+	custom := cfg.Pricing.Sheet != ""
+	if custom {
+		s, err := pricing.LoadFile(cfg.Pricing.Sheet)
+		if err != nil {
+			log.Fatalf("pricing sheet: %v", err)
+		}
+		layers = append(layers, s)
+		log.Printf("pricing: using custom sheet %s (live fetch skipped)", cfg.Pricing.Sheet)
+	}
+
+	if !custom && cfg.RemoteEnabled() {
+		ttl, err := cfg.RemoteTTL()
+		if err != nil {
+			log.Fatalf("pricing: %v", err)
+		}
+		fetchCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		sheet, err := pricing.LoadRemote(fetchCtx, pricing.RemoteOptions{
+			URL:       cfg.Pricing.Remote.URL,
+			TTL:       ttl,
+			CachePath: cfg.Pricing.Remote.CachePath,
+		})
+		cancel()
+		switch {
+		case err != nil:
+			log.Printf("pricing: live prices unavailable (%v); using embedded defaults", err)
+		case sheet != nil:
+			layers = append(layers, sheet)
+			log.Printf("pricing: loaded live prices from models.dev")
+		}
+	}
+
+	layers = append(layers, pricing.Default())
+	return pricing.NewResolver(layers...)
 }

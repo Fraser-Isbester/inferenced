@@ -16,6 +16,7 @@ import (
 
 	"github.com/Fraser-Isbester/inferenced/internal/identity"
 	"github.com/Fraser-Isbester/inferenced/internal/logx"
+	"github.com/Fraser-Isbester/inferenced/internal/pricing"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
 )
@@ -41,6 +42,9 @@ var reqCounter atomic.Uint64
 type Options struct {
 	DeveloperID string
 	Team        string
+	// Pricing resolves per-model cost from the layered price sheets. When nil,
+	// or when it cannot price a model, the provider's built-in Price is used.
+	Pricing *pricing.Resolver
 }
 
 // New returns a reverse proxy that detects the target provider, forwards the
@@ -54,6 +58,17 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 	// required for low-latency Server-Sent Events streaming.
 	rp.FlushInterval = -1
 	rp.Transport = &http.Transport{ForceAttemptHTTP2: true}
+
+	// priceOf prefers the layered price resolver and falls back to the
+	// provider's built-in price when the resolver has no entry for the model.
+	priceOf := func(p provider.Provider, model string, inTok, outTok int) float64 {
+		if opts.Pricing != nil {
+			if cost, ok := opts.Pricing.Price(p.Name(), model, inTok, outTok); ok {
+				return cost
+			}
+		}
+		return p.Price(model, inTok, outTok)
+	}
 
 	rp.Rewrite = func(pr *httputil.ProxyRequest) {
 		out := pr.Out
@@ -74,6 +89,14 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		out.URL.Host = host
 		// Set both so the upstream sees the correct Host header.
 		out.Host = host
+
+		// Strip the client's Accept-Encoding. When the inbound request carries
+		// it, Go's Transport forwards it verbatim and does NOT auto-decompress
+		// the response, so the tee'd observer copy would be gzip/br bytes the SSE
+		// parser cannot read — yielding OutputTokens=0. Removing it lets the
+		// Transport advertise gzip and transparently decompress, so the observer
+		// (and the client) see plain text. Bandwidth is irrelevant on localhost.
+		out.Header.Del("Accept-Encoding")
 
 		// Read and restore the body so ParseRequest can inspect it while the
 		// forwarded request still carries a replayable body.
@@ -168,7 +191,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			if u.Approximated {
 				ev.TokensApproximated = true
 			}
-			ev.CostUSD = p.Price(model, ev.InputTokens, ev.OutputTokens)
+			ev.CostUSD = priceOf(p, model, ev.InputTokens, ev.OutputTokens)
 			ev.DurationMs = time.Since(start).Milliseconds()
 			sink.Emit(*ev)
 
@@ -195,7 +218,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 				ev.DurationMs = time.Since(start).Milliseconds()
 			}
 			if p, ok := req.Context().Value(providerKey).(provider.Provider); ok && p != nil {
-				ev.CostUSD = p.Price(ev.Model, ev.InputTokens, ev.OutputTokens)
+				ev.CostUSD = priceOf(p, ev.Model, ev.InputTokens, ev.OutputTokens)
 			}
 			ev.TokensApproximated = true
 			sink.Emit(*ev)

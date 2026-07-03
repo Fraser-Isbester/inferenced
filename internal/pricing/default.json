@@ -1,0 +1,18 @@
+{
+  "anthropic": {
+    "default": { "input_per_1m": 3.0, "output_per_1m": 15.0 },
+    "opus":    { "input_per_1m": 15.0, "output_per_1m": 75.0 },
+    "sonnet":  { "input_per_1m": 3.0, "output_per_1m": 15.0 },
+    "haiku":   { "input_per_1m": 0.80, "output_per_1m": 4.0 }
+  },
+  "openai": {
+    "default":      { "input_per_1m": 2.50, "output_per_1m": 10.0 },
+    "gpt-4o-mini":  { "input_per_1m": 0.15, "output_per_1m": 0.60 },
+    "gpt-4o":       { "input_per_1m": 2.50, "output_per_1m": 10.0 }
+  },
+  "gemini": {
+    "default": { "input_per_1m": 1.25, "output_per_1m": 5.0 },
+    "pro":     { "input_per_1m": 1.25, "output_per_1m": 5.0 },
+    "flash":   { "input_per_1m": 0.075, "output_per_1m": 0.30 }
+  }
+}
