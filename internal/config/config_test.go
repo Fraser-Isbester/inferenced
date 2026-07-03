@@ -170,3 +170,25 @@ var _ = Describe("EnforceLimits", func() {
 		Expect(cfg.EnforceAction()).To(Equal(enforce.ActionBlock))
 	})
 })
+
+var _ = Describe("Save", func() {
+	It("creates parent directories and round-trips through Load", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "nested", "inferenced.yaml")
+
+		cfg := config.Default()
+		cfg.Developer.ID = "dev-1"
+		cfg.Developer.Team = "team-a"
+		Expect(cfg.Save(path)).To(Succeed())
+
+		info, err := os.Stat(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o644)))
+
+		loaded, err := config.Load(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Developer.ID).To(Equal("dev-1"))
+		Expect(loaded.Developer.Team).To(Equal("team-a"))
+		Expect(loaded.Listen).To(Equal(cfg.Listen))
+	})
+})

@@ -2,7 +2,7 @@ version: "3"
 
 vars:
   BINARY: inferenced
-  MAIN: ./cmd/gateway
+  MAIN: ./cmd/inferenced
 
 tasks:
   default:

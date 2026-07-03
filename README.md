@@ -24,14 +24,50 @@ inbound HTTP ─► [detect provider] ─► [ReverseProxy: rewrite to upstream 
 - **Structured telemetry** — each request produces a serializable `Event` handed to a `Sink`. Today that's stdout; the control-plane shipper is a drop-in.
 - **Developer identity** — a stable, non-secret `sha256(credential)[:12]` is attached to every event for future per-person/team cost attribution. The raw credential is never logged or stored.
 
-## Quickstart
+## Install
 
-Run the gateway:
+Homebrew (tap):
 
 ```bash
-go run ./cmd/gateway --port=8766
-# or, from a release build:
-inferenced --port=8766
+brew install Fraser-Isbester/tap/inferenced
+```
+
+Or the curl installer (downloads the latest release for your OS/arch, verifies the sha256, installs to `~/.local/bin`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Fraser-Isbester/inferenced/main/install.sh | sh
+```
+
+Then optionally register the background gateway service:
+
+```bash
+inferenced install
+```
+
+## CLI
+
+`inferenced` is a single binary with a small command tree:
+
+| Command | What it does |
+| --- | --- |
+| `serve` | Run the local inference gateway (`--port` overrides the config listen address). |
+| `install` / `uninstall` | Install or remove the background gateway service (launchd on macOS, systemd user unit on Linux). |
+| `config init` | Write a starter config to the resolved path (`--force` to overwrite). |
+| `config validate` | Load the config and validate its enforcement limits. |
+| `config path` | Print the config path in effect. |
+| `config show` | Print the effective config as YAML. |
+| `spend` | Summarize recorded spend from the local ledger (`--period day\|month\|rolling`, `--window`, `--since`). |
+| `ui` | Local web dashboard (coming soon). |
+| `version` | Print the build version. |
+
+## Quickstart
+
+Run the gateway from a release build:
+
+```bash
+inferenced serve --port=8766
+# or from source:
+go run ./cmd/inferenced serve --port=8766
 ```
 
 Point a coding agent at it and use it normally:
@@ -119,7 +155,7 @@ task            # vet + lint + test
 task test       # Ginkgo suites with the race detector
 task lint       # golangci-lint
 task build      # -> bin/inferenced
-task run -- --port=8766
+task run -- serve --port=8766
 ```
 
 ## Roadmap

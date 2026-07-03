@@ -1,12 +1,7 @@
-// Command gateway runs the inferenced local reverse proxy. It listens on
-// 127.0.0.1 and intercepts LLM inference traffic for the registered providers,
-// forwarding upstream while emitting structured telemetry.
-package main
+package cli
 
 import (
 	"context"
-	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/enforce"
@@ -23,22 +20,29 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
 )
 
-// version is the build version, injected via -ldflags "-X main.version=..." by
-// goreleaser. It defaults to "dev" for local builds.
-var version = "dev"
+// init registers the serve command.
+func init() { register(newServeCmd) }
 
-func main() {
-	configPath := flag.String("config", "", "path to config file (default: search ./inferenced.yaml and $XDG_CONFIG_HOME)")
-	port := flag.String("port", "", "TCP port to listen on (overrides config listen address)")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("inferenced", version)
-		return
+// newServeCmd builds the "serve" command, which runs the local reverse proxy.
+func newServeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run the local inference gateway",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			configPath, _ := cmd.Flags().GetString("config")
+			port, _ := cmd.Flags().GetString("port")
+			runServe(configPath, port)
+			return nil
+		},
 	}
+	cmd.Flags().String("port", "", "TCP port to listen on (overrides config listen address)")
+	return cmd
+}
 
-	cfg, err := config.Load(*configPath)
+// runServe holds the gateway body moved verbatim from the former command main.
+// Behavior is identical to the previous binary: fatal errors call log.Fatalf.
+func runServe(configPath, port string) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -48,8 +52,8 @@ func main() {
 	if v := os.Getenv("PORT"); v != "" {
 		addr = "127.0.0.1:" + v
 	}
-	if *port != "" {
-		addr = "127.0.0.1:" + *port
+	if port != "" {
+		addr = "127.0.0.1:" + port
 	}
 
 	reg := cfg.Registry()
@@ -108,7 +112,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("listening on %s (inferenced %s)", addr, version)
+		log.Printf("listening on %s (inferenced %s)", addr, Version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}

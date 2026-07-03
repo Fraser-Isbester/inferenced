@@ -163,6 +163,87 @@ func (s *Store) Spend(scope, id string, since time.Time) (float64, error) {
 	return total, nil
 }
 
+// ReportRow is one grouped spend total keyed by a dimension value (a developer
+// id, team, or model), with its aggregate cost and request count.
+type ReportRow struct {
+	Key      string
+	CostUSD  float64
+	Requests int
+}
+
+// Report is a spend summary grouped by developer, team, and model, plus the
+// overall totals across all matching events.
+type Report struct {
+	ByDeveloper   []ReportRow
+	ByTeam        []ReportRow
+	ByModel       []ReportRow
+	TotalUSD      float64
+	TotalRequests int
+}
+
+// SpendReport summarizes recorded spend since the given time. It groups events
+// by developer_id, team, and model (summing cost_usd and counting rows) and
+// computes the overall totals. The query is read-only and fully parameterized.
+func (s *Store) SpendReport(since time.Time) (Report, error) {
+	sinceMs := since.UnixMilli()
+
+	byDeveloper, err := s.groupBy("developer_id", sinceMs)
+	if err != nil {
+		return Report{}, err
+	}
+	byTeam, err := s.groupBy("team", sinceMs)
+	if err != nil {
+		return Report{}, err
+	}
+	byModel, err := s.groupBy("model", sinceMs)
+	if err != nil {
+		return Report{}, err
+	}
+
+	const totalsQ = `SELECT COALESCE(SUM(cost_usd), 0), COUNT(*) FROM events WHERE ts_unix_ms >= ?`
+	var (
+		totalUSD      float64
+		totalRequests int
+	)
+	if err := s.db.QueryRow(totalsQ, sinceMs).Scan(&totalUSD, &totalRequests); err != nil {
+		return Report{}, fmt.Errorf("query spend totals: %w", err)
+	}
+
+	return Report{
+		ByDeveloper:   byDeveloper,
+		ByTeam:        byTeam,
+		ByModel:       byModel,
+		TotalUSD:      totalUSD,
+		TotalRequests: totalRequests,
+	}, nil
+}
+
+// groupBy returns the per-value cost and request totals for a single grouping
+// column since sinceMs. The column is chosen by callers from a fixed set (never
+// interpolated from external input) and all values are bound as parameters.
+func (s *Store) groupBy(col string, sinceMs int64) ([]ReportRow, error) {
+	// #nosec G202 -- col is a fixed literal chosen by SpendReport, not input.
+	q := `SELECT ` + col + `, COALESCE(SUM(cost_usd), 0), COUNT(*) FROM events WHERE ts_unix_ms >= ? GROUP BY ` + col + ` ORDER BY SUM(cost_usd) DESC`
+	rows, err := s.db.Query(q, sinceMs)
+	if err != nil {
+		return nil, fmt.Errorf("query spend by %s: %w", col, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ReportRow
+	for rows.Next() {
+		var r ReportRow
+		if err := rows.Scan(&r.Key, &r.CostUSD, &r.Requests); err != nil {
+			return nil, fmt.Errorf("scan spend by %s: %w", col, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate spend by %s: %w", col, err)
+	}
+	return out, nil
+}
+
 // Close closes the underlying database.
 func (s *Store) Close() error {
 	if err := s.db.Close(); err != nil {

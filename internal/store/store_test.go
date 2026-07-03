@@ -95,4 +95,62 @@ var _ = Describe("Store", func() {
 		_, err := st.Spend("bogus", "x", now)
 		Expect(err).To(HaveOccurred())
 	})
+
+	Describe("SpendReport", func() {
+		emitModel := func(dev, team, model string, cost float64, ts time.Time) {
+			st.Emit(telemetry.Event{
+				RequestID:       "req",
+				TimestampUnixMs: ts.UnixMilli(),
+				DeveloperID:     dev,
+				Team:            team,
+				Provider:        "anthropic",
+				Model:           model,
+				CostUSD:         cost,
+			})
+		}
+
+		It("groups spend by developer, team, and model and computes totals", func() {
+			emitModel("dev-1", "team-a", "sonnet", 2.0, now)
+			emitModel("dev-1", "team-a", "haiku", 1.0, now)
+			emitModel("dev-2", "team-b", "sonnet", 3.0, now)
+
+			report, err := st.SpendReport(now.Add(-time.Hour))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(report.TotalUSD).To(BeNumerically("~", 6.0, 1e-9))
+			Expect(report.TotalRequests).To(Equal(3))
+
+			// Rows are ordered by descending cost.
+			Expect(report.ByDeveloper).To(HaveLen(2))
+			Expect(report.ByDeveloper[0].Key).To(Equal("dev-1"))
+			Expect(report.ByDeveloper[0].CostUSD).To(BeNumerically("~", 3.0, 1e-9))
+			Expect(report.ByDeveloper[0].Requests).To(Equal(2))
+
+			Expect(report.ByTeam).To(HaveLen(2))
+			Expect(report.ByModel).To(HaveLen(2))
+			Expect(report.ByModel[0].Key).To(Equal("sonnet"))
+			Expect(report.ByModel[0].CostUSD).To(BeNumerically("~", 5.0, 1e-9))
+			Expect(report.ByModel[0].Requests).To(Equal(2))
+		})
+
+		It("excludes rows older than the cutoff", func() {
+			emitModel("dev-1", "team-a", "sonnet", 10.0, now.Add(-48*time.Hour))
+			emitModel("dev-1", "team-a", "sonnet", 1.0, now)
+
+			report, err := st.SpendReport(now.Add(-24 * time.Hour))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(report.TotalUSD).To(BeNumerically("~", 1.0, 1e-9))
+			Expect(report.TotalRequests).To(Equal(1))
+		})
+
+		It("returns empty groups and zero totals when no rows match", func() {
+			report, err := st.SpendReport(now)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(report.ByDeveloper).To(BeEmpty())
+			Expect(report.ByTeam).To(BeEmpty())
+			Expect(report.ByModel).To(BeEmpty())
+			Expect(report.TotalUSD).To(Equal(0.0))
+			Expect(report.TotalRequests).To(Equal(0))
+		})
+	})
 })

@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: inferenced
-    main: ./cmd/gateway
+    main: ./cmd/inferenced
     binary: inferenced
     env:
       - CGO_ENABLED=0
@@ -27,6 +27,28 @@ archives:
       - tar.gz
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+# Homebrew Cask (macOS). goreleaser deprecated `brews` (formulae) in favor of
+# casks for pre-built binaries. Casks are macOS-only; Linux installs via install.sh.
+homebrew_casks:
+  - repository:
+      owner: Fraser-Isbester
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    name: inferenced
+    homepage: "https://github.com/Fraser-Isbester/inferenced"
+    description: "Local LLM inference gateway: meter, enforce, observe"
+    binaries:
+      - inferenced
+    # The binary is not yet Developer-ID signed/notarized, so strip the download
+    # quarantine on install to avoid a Gatekeeper prompt. Remove once notarized.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/inferenced"]
+          end
+    caveats: "Run 'inferenced install' to set up the local gateway service."
 
 checksum:
   name_template: checksums.txt
