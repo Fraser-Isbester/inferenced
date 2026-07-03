@@ -65,6 +65,19 @@ pricing:
     ttl: "24h"                        # cache freshness window (any Go duration)
     # cache_path: ""                  # empty -> $XDG_CACHE_HOME/inferenced/pricing.json
 
+# OpenTelemetry export. When enabled, every metered request is emitted as an
+# OTLP/HTTP span using the GenAI semantic conventions (gen_ai.request.model,
+# gen_ai.usage.input_tokens/output_tokens) plus cost_usd/developer/team, so the
+# data flows into any OTel stack (Grafana/Tempo, Honeycomb, Datadog). This is
+# our OWN authoritative telemetry — we never ingest the agent's OTel. When the
+# client propagated a `traceparent`, our span is parented to it for correlation.
+otel:
+  enabled: false                       # default off
+  endpoint: "localhost:4318"           # OTLP/HTTP collector (host:port or full URL)
+  # insecure: true                     # default true (local plain-HTTP collector); set false to require TLS
+  # headers:                           # extra export headers, e.g. a vendor API key
+  #   x-honeycomb-team: "YOUR_KEY"
+
 # Local spend ledger. Every metered request is persisted to a pure-Go SQLite
 # database (no CGO), which powers the enforcement engine below.
 storage:

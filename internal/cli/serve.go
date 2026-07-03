@@ -15,6 +15,7 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/enforce"
 	"github.com/Fraser-Isbester/inferenced/internal/identity"
+	"github.com/Fraser-Isbester/inferenced/internal/otelexport"
 	"github.com/Fraser-Isbester/inferenced/internal/pricing"
 	"github.com/Fraser-Isbester/inferenced/internal/proxy"
 	"github.com/Fraser-Isbester/inferenced/internal/store"
@@ -83,6 +84,23 @@ func runServe(configPath, port string) {
 		sinks = append(sinks, st)
 	}
 
+	// Optional OpenTelemetry exporter Sink. Flushed on shutdown below.
+	var otelExp *otelexport.Exporter
+	if cfg.OTelEnabled() {
+		exp, err := otelexport.New(context.Background(), otelexport.Config{
+			Endpoint: cfg.OTel.Endpoint,
+			Insecure: cfg.OTelInsecure(),
+			Headers:  cfg.OTel.Headers,
+			Version:  Version,
+		})
+		if err != nil {
+			log.Fatalf("otel exporter: %v", err)
+		}
+		otelExp = exp
+		sinks = append(sinks, exp)
+		log.Printf("otel: exporting spans via OTLP/HTTP")
+	}
+
 	resolver := buildPriceResolver(cfg)
 
 	sink := telemetry.MultiSink(sinks...)
@@ -134,6 +152,12 @@ func runServe(configPath, port string) {
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("graceful shutdown failed: %v", err)
+		}
+		// Flush any buffered OTel spans before exit.
+		if otelExp != nil {
+			if err := otelExp.Shutdown(shutdownCtx); err != nil {
+				log.Printf("otel shutdown failed: %v", err)
+			}
 		}
 	}
 }

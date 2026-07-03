@@ -187,6 +187,18 @@ enforcement:
 
 With `action: warn`, nothing is enforced — every block/downgrade intent is logged (`[LIMIT] warn …`) and the request forwarded unchanged, so you can dry-run a policy. Enabling enforcement automatically starts the ledger even if `storage.enabled` is false, since enforcement reads from it. Spend-query failures **fail open** (the request is allowed) so a ledger hiccup never blocks a developer.
 
+## OpenTelemetry export
+
+Enable the OTel exporter to emit every metered request as an OTLP/HTTP span using the [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) (`gen_ai.request.model`, `gen_ai.usage.input_tokens`/`output_tokens`) plus `cost_usd`/`developer`/`team`/`provider`. The data flows into any OTel backend (Grafana/Tempo, Honeycomb, Datadog) with no bespoke shipper.
+
+```yaml
+otel:
+  enabled: true
+  endpoint: "localhost:4318"   # OTLP/HTTP collector
+```
+
+This is inferenced's **own** authoritative, wire-parsed telemetry — it never ingests or trusts the agent's OTel. When the client propagated a `traceparent` (see below), the exported span is parented to that remote context, so our ground-truth metering correlates with the agent's trace downstream. Transport is OTLP over HTTP (protobuf, no gRPC); standard `OTEL_EXPORTER_OTLP_*` env vars are honored when config fields are omitted.
+
 ## Development
 
 Requires **Go 1.26** and [Task](https://taskfile.dev). Tooling (Ginkgo, golangci-lint) is pinned via Go tool directives — no separate install needed.

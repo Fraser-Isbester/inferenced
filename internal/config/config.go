@@ -37,6 +37,23 @@ type Config struct {
 	Storage     Storage     `yaml:"storage"`
 	Enforcement Enforcement `yaml:"enforcement"`
 	Pricing     Pricing     `yaml:"pricing"`
+	OTel        OTel        `yaml:"otel"`
+}
+
+// OTel configures the OpenTelemetry exporter Sink, which emits each metered
+// request as a span (GenAI semantic conventions) over OTLP/HTTP.
+type OTel struct {
+	// Enabled turns the exporter on. Off by default.
+	Enabled bool `yaml:"enabled"`
+	// Endpoint is the OTLP/HTTP collector target (host:port or full URL). Empty
+	// uses the standard OTEL_EXPORTER_OTLP_* environment variables.
+	Endpoint string `yaml:"endpoint"`
+	// Insecure disables TLS to the collector. A nil value means true (the
+	// default), since collectors are typically local plain-HTTP; set false to
+	// require TLS.
+	Insecure *bool `yaml:"insecure"`
+	// Headers are extra headers sent with each export (e.g. a vendor API key).
+	Headers map[string]string `yaml:"headers"`
 }
 
 // Pricing configures how model prices are resolved. Resolution is layered:
@@ -364,6 +381,13 @@ func (c *Config) EnforceAction() enforce.Action {
 	}
 	return enforce.Action(c.Enforcement.Action)
 }
+
+// OTelEnabled reports whether the OpenTelemetry exporter Sink should run.
+func (c *Config) OTelEnabled() bool { return c.OTel.Enabled }
+
+// OTelInsecure reports whether the OTLP exporter should skip TLS. It defaults to
+// true (local plain-HTTP collector) unless explicitly set to false.
+func (c *Config) OTelInsecure() bool { return enabled(c.OTel.Insecure) }
 
 // RemoteEnabled reports whether the live models.dev price fetch should run. It
 // is on unless Pricing.Remote.Enabled is explicitly set to false.
