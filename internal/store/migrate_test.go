@@ -37,22 +37,24 @@ var _ = Describe("schema migration", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = st.Close() }()
 
-		// ...and a trace-carrying event must persist end-to-end.
+		// ...and a trace- and metadata-carrying event must persist end-to-end.
 		st.Emit(telemetry.Event{
 			RequestID: "r1", TimestampUnixMs: time.Now().UnixMilli(),
 			DeveloperID: "dev-1", Provider: "anthropic", Model: "claude-sonnet-4-5",
 			Status: 200, CostUSD: 0.5,
 			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", SpanID: "00f067aa0ba902b7",
+			Metadata: `{"files":["main.go"]}`,
 		})
 
 		verify, err := sql.Open("sqlite", path)
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = verify.Close() }()
-		var tid, sid string
-		row := verify.QueryRow(`SELECT trace_id, span_id FROM events WHERE request_id = ?`, "r1")
-		Expect(row.Scan(&tid, &sid)).To(Succeed())
+		var tid, sid, meta string
+		row := verify.QueryRow(`SELECT trace_id, span_id, metadata FROM events WHERE request_id = ?`, "r1")
+		Expect(row.Scan(&tid, &sid, &meta)).To(Succeed())
 		Expect(tid).To(Equal("4bf92f3577b34da6a3ce929d0e0e4736"))
 		Expect(sid).To(Equal("00f067aa0ba902b7"))
+		Expect(meta).To(Equal(`{"files":["main.go"]}`))
 	})
 
 	It("is idempotent when the columns already exist", func() {

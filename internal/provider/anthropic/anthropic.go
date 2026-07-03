@@ -12,9 +12,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
+	"github.com/Fraser-Isbester/inferenced/internal/provider/reqmeta"
 )
 
 // provider name and upstream host constants.
@@ -65,6 +67,9 @@ type messagesRequest struct {
 	System   json.RawMessage `json:"system"`
 	Messages []anthMessage   `json:"messages"`
 	Stream   bool            `json:"stream"`
+	Tools    []struct {
+		Name string `json:"name"`
+	} `json:"tools"`
 }
 
 // anthMessage is a single message. Content may be a plain string or an array of
@@ -92,7 +97,113 @@ func (anthropicProvider) ParseRequest(_ *http.Request, body []byte) provider.Req
 		Model:             req.Model,
 		ApproxInputTokens: textLen / 4,
 		Stream:            req.Stream,
+		Metadata:          extractMetadata(req),
 	}
+}
+
+// toolUseBlock is the shape of a tool_use content block; Input is decoded lazily
+// so we can pull file/command signals without imposing a schema on every tool.
+type toolUseBlock struct {
+	Type  string          `json:"type"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+// extractMetadata builds the bounded metadata blob from an Anthropic request:
+// advertised tools, tool-call counts, files touched, shell commands, and cwd/git
+// context parsed from the system prompt. Returns nil when nothing is captured.
+func extractMetadata(req messagesRequest) map[string]any {
+	b := reqmeta.New()
+	b.SetMessageCount(len(req.Messages))
+	for _, t := range req.Tools {
+		b.AddTool(t.Name)
+	}
+	for _, m := range req.Messages {
+		var blocks []toolUseBlock
+		if err := json.Unmarshal(m.Content, &blocks); err != nil {
+			continue // string content or non-array; no tool calls to mine
+		}
+		for _, blk := range blocks {
+			if blk.Type != "tool_use" {
+				continue
+			}
+			b.AddToolCall(blk.Name)
+			addToolInputSignals(b, blk.Input)
+		}
+	}
+	cwd, gitRepo, gitBranch := parseSystemEnv(req.System)
+	b.SetEnv(cwd, gitRepo, gitBranch)
+	return b.Map()
+}
+
+// addToolInputSignals pulls file paths and shell commands out of a tool_use
+// input object, tolerating any schema.
+func addToolInputSignals(b *reqmeta.Builder, input json.RawMessage) {
+	if len(input) == 0 {
+		return
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(input, &obj); err != nil {
+		return
+	}
+	for _, k := range []string{"file_path", "path", "notebook_path"} {
+		if s, ok := obj[k].(string); ok {
+			b.AddFile(s)
+		}
+	}
+	if s, ok := obj["command"].(string); ok {
+		b.AddCommand(s)
+	}
+}
+
+var (
+	reCwd    = regexp.MustCompile(`(?i)working directory:\s*(.+)`)
+	reGitYes = regexp.MustCompile(`(?i)is directory a git repo:\s*(yes|true)`)
+	reBranch = regexp.MustCompile(`(?i)current branch:\s*(\S+)`)
+)
+
+// parseSystemEnv best-effort extracts working directory, whether it is a git
+// repo, and the branch from Claude Code's system-prompt environment preamble.
+// Unmatched fields are returned empty.
+func parseSystemEnv(system json.RawMessage) (cwd, gitRepo, gitBranch string) {
+	text := systemText(system)
+	if text == "" {
+		return "", "", ""
+	}
+	if m := reCwd.FindStringSubmatch(text); m != nil {
+		cwd = strings.TrimSpace(m[1])
+	}
+	if reGitYes.MatchString(text) && cwd != "" {
+		gitRepo = cwd // the repo is the working directory when it is a git repo
+	}
+	if m := reBranch.FindStringSubmatch(text); m != nil {
+		gitBranch = m[1]
+	}
+	return cwd, gitRepo, gitBranch
+}
+
+// systemText flattens the system field (string or array of text blocks) to a
+// single string for env parsing.
+func systemText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var sb strings.Builder
+		for _, p := range parts {
+			sb.WriteString(p.Text)
+			sb.WriteByte('\n')
+		}
+		return sb.String()
+	}
+	return ""
 }
 
 // contentTextLen returns the number of text characters in a content field,

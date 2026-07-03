@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
+	"github.com/Fraser-Isbester/inferenced/internal/provider/reqmeta"
 )
 
 // request is the subset of an OpenAI-style request body we inspect. Messages
@@ -24,13 +25,25 @@ type request struct {
 	Messages []message       `json:"messages"`
 	Input    json.RawMessage `json:"input"`
 	Stream   bool            `json:"stream"`
+	Tools    []struct {
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	} `json:"tools"`
 }
 
 // message is a single chat message. Content may be a plain string or an array of
-// typed content parts, so it is decoded lazily.
+// typed content parts, so it is decoded lazily. Assistant messages may carry
+// tool_calls (function name + JSON-string arguments).
 type message struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	ToolCalls []struct {
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
 }
 
 // deploymentRe extracts a model/deployment name from a URL path, covering both
@@ -70,6 +83,45 @@ func ParseRequest(r *http.Request, body []byte) provider.RequestInfo {
 		Model:             model,
 		ApproxInputTokens: textLen / 4,
 		Stream:            req.Stream,
+		Metadata:          extractMetadata(req),
+	}
+}
+
+// extractMetadata builds the bounded metadata blob from an OpenAI-wire request:
+// advertised tools, tool-call counts, and files/commands mined from each tool
+// call's JSON-string arguments. Returns nil when nothing is captured.
+func extractMetadata(req request) map[string]any {
+	b := reqmeta.New()
+	b.SetMessageCount(len(req.Messages))
+	for _, t := range req.Tools {
+		b.AddTool(t.Function.Name)
+	}
+	for _, m := range req.Messages {
+		for _, tc := range m.ToolCalls {
+			b.AddToolCall(tc.Function.Name)
+			addArgSignals(b, tc.Function.Arguments)
+		}
+	}
+	return b.Map()
+}
+
+// addArgSignals pulls file paths and shell commands from a tool call's arguments
+// (a JSON-encoded string), tolerating any schema.
+func addArgSignals(b *reqmeta.Builder, args string) {
+	if args == "" {
+		return
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(args), &obj); err != nil {
+		return
+	}
+	for _, k := range []string{"file_path", "path", "notebook_path"} {
+		if s, ok := obj[k].(string); ok {
+			b.AddFile(s)
+		}
+	}
+	if s, ok := obj["command"].(string); ok {
+		b.AddCommand(s)
 	}
 }
 

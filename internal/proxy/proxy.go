@@ -131,6 +131,15 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		// usage/cost). Empty when the client propagates no traceparent.
 		traceID, spanID, _ := telemetry.ParseTraceparent(pr.In.Header.Get("traceparent"))
 
+		// Serialize the extracted request metadata blob (bounded coding-agent
+		// signals) for the ledger. Empty when nothing was captured or on error.
+		var metadataJSON string
+		if len(info.Metadata) > 0 {
+			if b, err := json.Marshal(info.Metadata); err == nil {
+				metadataJSON = string(b)
+			}
+		}
+
 		ev := &telemetry.Event{
 			RequestID:       reqID,
 			TimestampUnixMs: start.UnixMilli(),
@@ -145,6 +154,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			InputTokens:     info.ApproxInputTokens,
 			TraceID:         traceID,
 			SpanID:          spanID,
+			Metadata:        metadataJSON,
 		}
 
 		logx.Request(reqID, out.Method, out.URL.Path, p.Name(), info.Model, devID, logx.Redact(cred))

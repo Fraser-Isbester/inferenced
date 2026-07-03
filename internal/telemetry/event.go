@@ -52,6 +52,10 @@ type Event struct {
 	// SpanID is the W3C parent span id (16 hex chars) from the same header, or
 	// empty when absent.
 	SpanID string
+	// Metadata is an optional JSON blob of bounded coding-agent signals
+	// (tools, files, commands, cwd/git context, counts) extracted from the
+	// request body for later usage analytics. Empty when nothing was captured.
+	Metadata string
 }
 
 // Sink records the final [RESPONSE] Event. Implementations must be safe for

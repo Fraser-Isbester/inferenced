@@ -90,10 +90,16 @@ func (geminiProvider) ParseRequest(r *http.Request, body []byte) provider.Reques
 		}
 	}
 
+	var meta map[string]any
+	if n := len(req.Contents); n > 0 {
+		meta = map[string]any{"message_count": n}
+	}
+
 	return provider.RequestInfo{
 		Model:             model,
 		ApproxInputTokens: textLen / 4,
 		Stream:            stream,
+		Metadata:          meta,
 	}
 }
 

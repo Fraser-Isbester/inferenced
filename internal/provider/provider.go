@@ -24,6 +24,11 @@ type RequestInfo struct {
 	ApproxInputTokens int
 	// Stream reports whether the client requested a streamed response.
 	Stream bool
+	// Metadata is an optional bounded blob of coding-agent signals extracted
+	// from the request body (tools, tool-call counts, files, commands, cwd/git
+	// context, message count) for later usage analytics. Nil when nothing was
+	// captured; it never contains raw prompt or file-content text.
+	Metadata map[string]any
 }
 
 // Usage holds the token accounting for a single inference response.

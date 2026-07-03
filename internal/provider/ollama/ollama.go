@@ -84,11 +84,17 @@ func (ollamaProvider) ParseRequest(_ *http.Request, body []byte) provider.Reques
 		textLen += len(m.Content)
 	}
 
+	var meta map[string]any
+	if n := len(req.Messages); n > 0 {
+		meta = map[string]any{"message_count": n}
+	}
+
 	return provider.RequestInfo{
 		Model:             req.Model,
 		ApproxInputTokens: textLen / 4,
 		// Ollama streams by default; the response is NDJSON regardless.
-		Stream: true,
+		Stream:   true,
+		Metadata: meta,
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -34,6 +35,7 @@ type Store interface {
 	SpendReport(since time.Time) (store.Report, error)
 	RecentEvents(limit int) ([]store.EventRow, int64, error)
 	EventsSince(sinceRowID int64, limit int) ([]store.EventRow, int64, error)
+	EventMetadata(rowID int64) (string, error)
 }
 
 // Handler builds the dashboard HTTP handler. st is the ledger read handle; cfg
@@ -68,6 +70,28 @@ func Handler(st Store, cfg *config.Config) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 		_, _ = w.Write(b)
+	})
+
+	mux.HandleFunc("/api/event", func(w http.ResponseWriter, r *http.Request) {
+		rowID, err := strconv.ParseInt(r.URL.Query().Get("row_id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid row_id", http.StatusBadRequest)
+			return
+		}
+		meta, err := st.EventMetadata(rowID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		// meta is a JSON string (or empty); wrap it as raw JSON so the client
+		// receives the blob directly under "metadata".
+		if meta == "" {
+			meta = "null"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"metadata":`))
+		_, _ = w.Write([]byte(meta))
+		_, _ = w.Write([]byte("}"))
 	})
 
 	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {

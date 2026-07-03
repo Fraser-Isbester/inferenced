@@ -197,6 +197,18 @@ inferenced ui            # then open http://127.0.0.1:8788
 
 It shows spend totals (by model / team, per day/month/rolling window) and a **live feed** of requests streamed over Server-Sent Events (a ~1s tail of new ledger rows). It is read-only — no config editing — and binds to localhost only. `GET /api/config` exposes the effective config as YAML for inspection.
 
+## Request metadata
+
+Every metered request stores a bounded, structured **metadata blob** parsed from the request body — the seed for later "impact of AI usage" analytics. Because coding agents replay the whole conversation on each call, one request reveals a lot:
+
+- `tools` available and `tool_call_counts` by name
+- `files` touched (from Read/Edit/Write tool inputs)
+- `commands` run (from Bash tool inputs — captures `git commit`, `gh pr create`, …)
+- `cwd`, `git_repo`, `git_branch` (parsed from the agent's system-prompt environment, Anthropic)
+- `message_count`
+
+It is captured from the **request only** (Anthropic + OpenAI-wire; Gemini/Ollama record `message_count`), size-capped, and **excludes raw prompt and file-content text**. The blob is stored on each ledger row; the dashboard's live feed shows it when you click a request. Nothing is sent anywhere — it lives in your local SQLite ledger.
+
 ## OpenTelemetry export
 
 Enable the OTel exporter to emit every metered request as an OTLP/HTTP span using the [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) (`gen_ai.request.model`, `gen_ai.usage.input_tokens`/`output_tokens`) plus `cost_usd`/`developer`/`team`/`provider`. The data flows into any OTel backend (Grafana/Tempo, Honeycomb, Datadog) with no bespoke shipper.

@@ -39,6 +39,7 @@ var _ = Describe("Handler", func() {
 			RequestID: "1", TimestampUnixMs: time.Now().UnixMilli(),
 			Provider: "anthropic", Model: "claude-sonnet-4-5", DeveloperID: "dev-1",
 			Team: "platform", Status: 200, InputTokens: 10, OutputTokens: 5, CostUSD: 1.5,
+			Metadata: `{"files":["main.go"],"commands":["git status"]}`,
 		})
 		srv = httptest.NewServer(uiserver.Handler(st, config.Default()))
 		DeferCleanup(func() {
@@ -74,6 +75,30 @@ var _ = Describe("Handler", func() {
 		Expect(report.TotalRequests).To(Equal(1))
 		Expect(report.ByModel).To(HaveLen(1))
 		Expect(report.ByModel[0].Key).To(Equal("claude-sonnet-4-5"))
+	})
+
+	It("returns a request's metadata blob at /api/event", func() {
+		resp, err := http.Get(srv.URL + "/api/event?row_id=1")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		var out struct {
+			Metadata struct {
+				Files    []string `json:"files"`
+				Commands []string `json:"commands"`
+			} `json:"metadata"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&out)).To(Succeed())
+		Expect(out.Metadata.Files).To(ConsistOf("main.go"))
+		Expect(out.Metadata.Commands).To(ConsistOf("git status"))
+	})
+
+	It("400s a bad row_id at /api/event", func() {
+		resp, err := http.Get(srv.URL + "/api/event?row_id=abc")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 	})
 
 	It("exposes the config read-only as YAML", func() {

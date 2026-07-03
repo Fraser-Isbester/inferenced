@@ -131,6 +131,8 @@ var _ = Describe("Proxy end-to-end", func() {
 		Expect(ev.OutputTokens).To(Equal(5))
 		Expect(ev.TraceID).To(Equal("4bf92f3577b34da6a3ce929d0e0e4736"))
 		Expect(ev.SpanID).To(Equal("00f067aa0ba902b7"))
+		// Request metadata was extracted and serialized onto the Event.
+		Expect(ev.Metadata).To(ContainSubstring(`"message_count"`))
 		Expect(ev.CostUSD).To(BeNumerically(">", 0))
 		Expect(ev.TokensApproximated).To(BeFalse())
 	})

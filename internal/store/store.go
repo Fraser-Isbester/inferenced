@@ -91,7 +91,8 @@ func migrate(db *sql.DB) error {
 			cost_usd REAL,
 			duration_ms INTEGER,
 			trace_id TEXT,
-			span_id TEXT
+			span_id TEXT,
+			metadata TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_developer ON events (developer_id, ts_unix_ms)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_team ON events (team, ts_unix_ms)`,
@@ -106,6 +107,7 @@ func migrate(db *sql.DB) error {
 	return ensureColumns(db, "events", []column{
 		{name: "trace_id", typ: "TEXT"},
 		{name: "span_id", typ: "TEXT"},
+		{name: "metadata", typ: "TEXT"},
 	})
 }
 
@@ -159,8 +161,8 @@ func (s *Store) Emit(e telemetry.Event) {
 	const q = `INSERT INTO events (
 		request_id, ts_unix_ms, developer_id, team, provider, model, stream,
 		status, input_tokens, output_tokens, tokens_approximated, cost_usd, duration_ms,
-		trace_id, span_id
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		trace_id, span_id, metadata
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	if _, err := s.db.Exec(q,
 		e.RequestID,
@@ -178,6 +180,7 @@ func (s *Store) Emit(e telemetry.Event) {
 		e.DurationMs,
 		e.TraceID,
 		e.SpanID,
+		e.Metadata,
 	); err != nil {
 		log.Printf("[STORE] insert event %s: %v", e.RequestID, err)
 	}
@@ -303,6 +306,18 @@ func (s *Store) EventsSince(sinceRowID int64, limit int) ([]EventRow, int64, err
 		maxRowID = out[n-1].RowID // ascending, so last is max
 	}
 	return out, maxRowID, nil
+}
+
+// EventMetadata returns the stored metadata JSON blob for a single event by
+// rowid. The string is empty when the row has no metadata; sql.ErrNoRows is
+// returned when the rowid does not exist.
+func (s *Store) EventMetadata(rowID int64) (string, error) {
+	var meta sql.NullString
+	err := s.db.QueryRow(`SELECT metadata FROM events WHERE rowid = ?`, rowID).Scan(&meta)
+	if err != nil {
+		return "", fmt.Errorf("query event %d metadata: %w", rowID, err)
+	}
+	return meta.String, nil
 }
 
 // ReportRow is one grouped spend total keyed by a dimension value (a developer
