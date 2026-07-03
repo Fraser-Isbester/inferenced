@@ -44,6 +44,14 @@ type Event struct {
 	CostUSD float64
 	// DurationMs is the total request duration in milliseconds.
 	DurationMs int64
+	// TraceID is the W3C trace-context trace id (32 hex chars) parsed from the
+	// inbound traceparent header, or empty when the client sent none. It exists
+	// purely to correlate this authoritative event with an agent-emitted trace
+	// downstream; it is never trusted for usage/cost.
+	TraceID string
+	// SpanID is the W3C parent span id (16 hex chars) from the same header, or
+	// empty when absent.
+	SpanID string
 }
 
 // Sink records the final [RESPONSE] Event. Implementations must be safe for

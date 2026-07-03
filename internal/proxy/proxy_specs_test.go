@@ -106,6 +106,8 @@ var _ = Describe("Proxy end-to-end", func() {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", "sk-ant-test-secret")
 		req.Header.Set("anthropic-version", "2023-06-01")
+		// A propagated W3C trace context must be captured for correlation.
+		req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 
 		resp, err := http.DefaultClient.Do(req)
 		Expect(err).NotTo(HaveOccurred())
@@ -127,6 +129,8 @@ var _ = Describe("Proxy end-to-end", func() {
 		Expect(ev.Provider).To(Equal("anthropic"))
 		Expect(ev.InputTokens).To(Equal(10))
 		Expect(ev.OutputTokens).To(Equal(5))
+		Expect(ev.TraceID).To(Equal("4bf92f3577b34da6a3ce929d0e0e4736"))
+		Expect(ev.SpanID).To(Equal("00f067aa0ba902b7"))
 		Expect(ev.CostUSD).To(BeNumerically(">", 0))
 		Expect(ev.TokensApproximated).To(BeFalse())
 	})

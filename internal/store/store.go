@@ -70,7 +70,10 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, ".local", "share", "inferenced", "inferenced.db"), nil
 }
 
-// migrate creates the events table and its indexes if they do not exist.
+// migrate creates the events table and its indexes if they do not exist, then
+// adds any columns missing from an older database. New columns must be appended
+// both to the CREATE TABLE above (for fresh databases) and to the ensureColumns
+// map below (for databases created by an earlier version).
 func migrate(db *sql.DB) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS events (
@@ -86,7 +89,9 @@ func migrate(db *sql.DB) error {
 			output_tokens INTEGER,
 			tokens_approximated INTEGER,
 			cost_usd REAL,
-			duration_ms INTEGER
+			duration_ms INTEGER,
+			trace_id TEXT,
+			span_id TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_developer ON events (developer_id, ts_unix_ms)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_team ON events (team, ts_unix_ms)`,
@@ -94,6 +99,54 @@ func migrate(db *sql.DB) error {
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
 			return fmt.Errorf("exec migration: %w", err)
+		}
+	}
+	// Columns added after the initial release. SQLite has no
+	// "ADD COLUMN IF NOT EXISTS", so add only what a pre-existing table lacks.
+	return ensureColumns(db, "events", []column{
+		{name: "trace_id", typ: "TEXT"},
+		{name: "span_id", typ: "TEXT"},
+	})
+}
+
+// column is a table column name and its SQLite type.
+type column struct {
+	name string
+	typ  string
+}
+
+// ensureColumns adds any of cols missing from table, using PRAGMA table_info to
+// discover the existing columns. It is idempotent: already-present columns are
+// left untouched.
+func ensureColumns(db *sql.DB, table string, cols []column) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan %s column: %w", table, err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	_ = rows.Close()
+
+	for _, c := range cols {
+		if existing[c.name] {
+			continue
+		}
+		// #nosec G202 -- table and column identifiers are fixed literals from
+		// migrate(), never external input; only the type is interpolated.
+		stmt := `ALTER TABLE ` + table + ` ADD COLUMN ` + c.name + ` ` + c.typ
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("add column %s.%s: %w", table, c.name, err)
 		}
 	}
 	return nil
@@ -105,8 +158,9 @@ func migrate(db *sql.DB) error {
 func (s *Store) Emit(e telemetry.Event) {
 	const q = `INSERT INTO events (
 		request_id, ts_unix_ms, developer_id, team, provider, model, stream,
-		status, input_tokens, output_tokens, tokens_approximated, cost_usd, duration_ms
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		status, input_tokens, output_tokens, tokens_approximated, cost_usd, duration_ms,
+		trace_id, span_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	if _, err := s.db.Exec(q,
 		e.RequestID,
@@ -122,6 +176,8 @@ func (s *Store) Emit(e telemetry.Event) {
 		boolToInt(e.TokensApproximated),
 		e.CostUSD,
 		e.DurationMs,
+		e.TraceID,
+		e.SpanID,
 	); err != nil {
 		log.Printf("[STORE] insert event %s: %v", e.RequestID, err)
 	}

@@ -127,6 +127,10 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		reqID := fmt.Sprintf("%d", reqCounter.Add(1))
 		start := time.Now()
 
+		// Capture W3C trace context for correlation only (never trusted for
+		// usage/cost). Empty when the client propagates no traceparent.
+		traceID, spanID, _ := telemetry.ParseTraceparent(pr.In.Header.Get("traceparent"))
+
 		ev := &telemetry.Event{
 			RequestID:       reqID,
 			TimestampUnixMs: start.UnixMilli(),
@@ -139,6 +143,8 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			Model:           info.Model,
 			Stream:          info.Stream,
 			InputTokens:     info.ApproxInputTokens,
+			TraceID:         traceID,
+			SpanID:          spanID,
 		}
 
 		logx.Request(reqID, out.Method, out.URL.Path, p.Name(), info.Model, devID, logx.Redact(cred))
