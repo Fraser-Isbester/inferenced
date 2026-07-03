@@ -1,0 +1,52 @@
+version: "3"
+
+vars:
+  BINARY: inferenced
+  MAIN: ./cmd/gateway
+
+tasks:
+  default:
+    desc: Run the standard check suite (vet + lint + test)
+    deps: [check]
+
+  tidy:
+    desc: Sync go.mod/go.sum
+    cmds:
+      - go mod tidy
+
+  fmt:
+    desc: Format all Go source
+    cmds:
+      - gofmt -w .
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - go tool golangci-lint run
+
+  test:
+    desc: Run the Ginkgo test suites with the race detector
+    cmds:
+      - go tool ginkgo -r --randomize-all --race
+
+  build:
+    desc: Build the gateway binary into bin/
+    cmds:
+      - go build -o bin/{{.BINARY}} {{.MAIN}}
+
+  run:
+    desc: Run the gateway from source
+    cmds:
+      - go run {{.MAIN}} {{.CLI_ARGS}}
+
+  check:
+    desc: Vet, lint, and test
+    cmds:
+      - task: vet
+      - task: lint
+      - task: test

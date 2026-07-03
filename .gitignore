@@ -1,0 +1,17 @@
+# Build output
+/bin/
+/dist/
+/inferenced
+/gateway
+*.exe
+
+# Test & coverage artifacts
+*.out
+coverage.*
+*.test
+
+# OS & editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/

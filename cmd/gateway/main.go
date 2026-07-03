@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,10 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
 )
 
+// version is the build version, injected via -ldflags "-X main.version=..." by
+// goreleaser. It defaults to "dev" for local builds.
+var version = "dev"
+
 func main() {
 	// Default port, overridable by --port flag or the PORT environment variable.
 	defaultPort := "8766"
@@ -27,7 +32,13 @@ func main() {
 		defaultPort = v
 	}
 	port := flag.String("port", defaultPort, "TCP port to listen on (127.0.0.1)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("inferenced", version)
+		return
+	}
 
 	reg := provider.NewRegistry()
 	reg.Register(anthropic.New())
@@ -47,7 +58,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("listening on %s", addr)
+		log.Printf("listening on %s (inferenced %s)", addr, version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
