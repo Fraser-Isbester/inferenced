@@ -7,6 +7,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,13 +75,12 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		out := pr.Out
 		p, ok := reg.Detect(pr.In)
 		if !ok {
-			// Unknown traffic: best-effort passthrough to the request's own host
-			// so the proxy does not fail on a relative outbound URL.
-			out.URL.Scheme = "https"
-			if out.URL.Host == "" {
-				out.URL.Host = pr.In.Host
-			}
-			out.Host = out.URL.Host
+			// Undetected traffic is rejected up front by Gate (see below), so this
+			// branch is defensive only. Do NOT rewrite the outbound to
+			// https://<our-own-host>: that made the proxy TLS-dial its own plaintext
+			// listener ("tls: first record does not look like a TLS handshake").
+			// Leaving out.URL untouched makes any stray call fail fast and cleanly
+			// rather than looping back on the gateway.
 			return
 		}
 
@@ -191,7 +191,12 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			if u.Approximated {
 				ev.TokensApproximated = true
 			}
-			ev.CostUSD = priceOf(p, model, ev.InputTokens, ev.OutputTokens)
+			// Only successful responses are billable. Non-2xx attempts (e.g. a 429
+			// rate-limit or a 4xx error) are still recorded for observability but
+			// contribute $0, so retries and failures never inflate enforced spend.
+			if ev.Status >= 200 && ev.Status < 300 {
+				ev.CostUSD = priceOf(p, model, ev.InputTokens, ev.OutputTokens)
+			}
 			ev.DurationMs = time.Since(start).Milliseconds()
 			sink.Emit(*ev)
 
@@ -217,9 +222,9 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			if start, ok := req.Context().Value(startKey).(time.Time); ok {
 				ev.DurationMs = time.Since(start).Milliseconds()
 			}
-			if p, ok := req.Context().Value(providerKey).(provider.Provider); ok && p != nil {
-				ev.CostUSD = priceOf(p, ev.Model, ev.InputTokens, ev.OutputTokens)
-			}
+			// A failed upstream transport is never billable: record the attempt at
+			// 502 with $0 cost.
+			ev.CostUSD = 0
 			ev.TokensApproximated = true
 			sink.Emit(*ev)
 		}
@@ -227,6 +232,34 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 	}
 
 	return rp
+}
+
+// Gate returns a middleware that rejects requests no provider recognizes,
+// before they reach the proxy. Without it, undetected traffic falls through to
+// a best-effort passthrough that (in env-override mode, where the inbound Host
+// is the gateway itself) would make the proxy dial its own plaintext listener
+// over TLS. There is no real upstream to forward such traffic to, so it fails
+// fast with a clear 404 and logs the route so detection can be broadened later.
+func Gate(reg *provider.Registry) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := reg.Detect(r); !ok {
+				host := r.Host
+				if host == "" && r.URL != nil {
+					host = r.URL.Host
+				}
+				fmt.Printf("[SKIP]     --> undetected: %s %s host=%s\n", r.Method, r.URL.Path, host)
+				body, _ := json.Marshal(map[string]string{
+					"error": "inferenced: no provider matched this request; is the client pointed at the right base URL?",
+				})
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write(body)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // teeBody wraps the upstream response body. Reads pass through an io.TeeReader

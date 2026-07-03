@@ -104,6 +104,9 @@ func runServe(configPath, port string) {
 		}
 		handler = enforce.Middleware(eng, resolve, reg, cfg.EnforceAction(), cfg.BlockStatus(), cfg.DowngradeRules())(handler)
 	}
+	// Reject undetected traffic outermost, before enforcement or metering, so a
+	// stray/non-inference request 404s instead of being spend-checked or dialed.
+	handler = proxy.Gate(reg)(handler)
 
 	srv := &http.Server{
 		Addr:    addr,
