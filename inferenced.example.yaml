@@ -45,3 +45,40 @@ providers:
       pricing:
         default: { input_per_1m: 0.20, output_per_1m: 0.20 }
         llama-3.1-70b: { input_per_1m: 0.90, output_per_1m: 0.90 }
+
+# Local spend ledger. Every metered request is persisted to a pure-Go SQLite
+# database (no CGO), which powers the enforcement engine below.
+storage:
+  enabled: true    # default true; set false to disable persistence entirely
+  # path: ""       # empty -> $XDG_DATA_HOME/inferenced/inferenced.db
+                   # (or ~/.local/share/inferenced/inferenced.db)
+
+# Enforcement of spend limits against the local ledger. Requires storage; when
+# enforcement is on the ledger is started automatically even if disabled above.
+enforcement:
+  enabled: false   # default false; turn on to evaluate the limits below
+  action: block    # "block" (reject with a provider-shaped error) or "warn" (log only)
+  # HTTP status used when blocking. Default 402 (Payment Required): coding agents
+  # read it as a quota/billing stop and surface the message. Avoid 401/403 (Claude
+  # Code maps those to "run /login") and 429 (treated as retryable rate-limiting).
+  block_status: 402
+  limits:
+    # Each limit applies when its scope/id matches the request's developer or
+    # team. id: "*" matches everyone in that scope. A request is blocked when
+    # cumulative spend for the period reaches limit_usd.
+    #
+    # scope:  team | developer
+    # period: day | month | rolling  (rolling requires `window`, a Go duration)
+    - scope: developer
+      id: "*"          # every developer gets their own $5/day budget
+      period: day
+      limit_usd: 5
+    - scope: team
+      id: platform
+      period: month
+      limit_usd: 500
+    - scope: team
+      id: "*"          # any team, over a rolling 7-day window
+      period: rolling
+      window: 168h
+      limit_usd: 1000

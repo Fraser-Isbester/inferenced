@@ -84,6 +84,32 @@ providers:
     - { name: vllm-local, host: "localhost:8000", scheme: http }
 ```
 
+## Enforcement & local spend ledger
+
+Every metered request is persisted to a local, pure-Go **SQLite** ledger (no CGO). The ledger records the per-request cost, model, developer, and team, and is the source of truth for spend enforcement. It lives at `$XDG_DATA_HOME/inferenced/inferenced.db` (falling back to `~/.local/share/inferenced/inferenced.db`) unless you set `storage.path`. Persistence is on by default; set `storage.enabled: false` to turn it off.
+
+On top of the ledger, inferenced can **enforce spend limits** defined entirely in local config — no backend required. Limits are keyed on an abstract team/group concept plus the developer identity, so you can cap an individual, a whole team, or everyone at once.
+
+```yaml
+storage:
+  enabled: true          # default; persist every request to the local ledger
+
+enforcement:
+  enabled: true          # evaluate the limits below on every request
+  action: block          # "block" (reject with a provider-shaped error) or "warn" (log only)
+  block_status: 402      # HTTP status when blocking (default 402 Payment Required)
+  limits:
+    - { scope: developer, id: "*",      period: day,     limit_usd: 5 }
+    - { scope: team,      id: platform, period: month,   limit_usd: 500 }
+    - { scope: team,      id: "*",      period: rolling, window: 168h, limit_usd: 1000 }
+```
+
+- **Scope** is `developer` or `team`; `id: "*"` matches everyone in that scope, otherwise the limit applies only to the named developer/team.
+- **Period** is `day`, `month`, or `rolling`. `day` and `month` reset at the local calendar boundary; `rolling` sums spend over a trailing `window` (any Go duration, e.g. `168h`) and is **required** for rolling limits.
+- A request is over the limit once cumulative spend for the period **reaches** `limit_usd`.
+
+When a limit is exceeded and `action: block`, the request is denied (never forwarded) with a **provider-shaped error envelope** so the calling client surfaces a native, non-retriable error. The status defaults to **402 Payment Required** (`block_status`), which coding agents read as a quota/billing stop — deliberately **not** 401/403 (Claude Code maps those to "run `/login`") or 429 (treated as retryable rate-limiting). The error type is mapped per provider for a 402 budget block (Anthropic `invalid_request_error`, OpenAI `insufficient_quota`, Gemini `FAILED_PRECONDITION`). With `action: warn`, the request is allowed and a `[LIMIT] warn` line is logged. Enabling enforcement automatically starts the ledger even if `storage.enabled` is false, since enforcement reads from it. Spend-query failures **fail open** (the request is allowed) so a ledger hiccup never blocks a developer.
+
 ## Development
 
 Requires **Go 1.26** and [Task](https://taskfile.dev). Tooling (Ginkgo, golangci-lint) is pinned via Go tool directives — no separate install needed.

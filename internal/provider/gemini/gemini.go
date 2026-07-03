@@ -212,3 +212,34 @@ func (geminiProvider) Price(model string, inTok, outTok int) float64 {
 	}
 	return float64(inTok)/1e6*pr.inPerM + float64(outTok)/1e6*pr.outPerM
 }
+
+// ErrorResponse renders Gemini's native error envelope. The status field is
+// "PERMISSION_DENIED" for HTTP 403 and "UNKNOWN" otherwise.
+func (geminiProvider) ErrorResponse(status int, message string) (string, []byte) {
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"code":    status,
+			"message": message,
+			"status":  geminiErrStatus(status),
+		},
+	})
+	return "application/json", body
+}
+
+// geminiErrStatus maps an HTTP status to Google's canonical error status. A
+// budget block (402) maps to FAILED_PRECONDITION (a terminal, non-retriable,
+// non-auth condition).
+func geminiErrStatus(status int) string {
+	switch {
+	case status == http.StatusForbidden:
+		return "PERMISSION_DENIED"
+	case status == http.StatusTooManyRequests:
+		return "RESOURCE_EXHAUSTED"
+	case status == http.StatusBadRequest:
+		return "INVALID_ARGUMENT"
+	case status >= 500:
+		return "INTERNAL"
+	default:
+		return "FAILED_PRECONDITION"
+	}
+}

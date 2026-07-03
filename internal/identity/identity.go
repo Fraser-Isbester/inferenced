@@ -47,6 +47,16 @@ func DeveloperID(credential string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// Resolve determines the developer and team attribution for a request. devID is
+// overrideID when non-empty, otherwise the anonymized id derived from the
+// request credential; teamOut is the given team unchanged.
+func Resolve(r *http.Request, overrideID, team string) (devID, teamOut string) {
+	if overrideID != "" {
+		return overrideID, team
+	}
+	return DeveloperID(Credential(r)), team
+}
+
 // OSUser returns the local operating-system username, or "unknown" if it cannot
 // be determined.
 func OSUser() string {

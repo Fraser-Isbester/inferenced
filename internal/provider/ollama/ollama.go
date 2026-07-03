@@ -157,3 +157,12 @@ func (p *streamParser) Finish() provider.Usage {
 
 // Price returns 0: Ollama runs locally at no per-token cost.
 func (ollamaProvider) Price(string, int, int) float64 { return 0 }
+
+// ErrorResponse renders Ollama's native error envelope, a flat object with a
+// single "error" string. The status is unused.
+func (ollamaProvider) ErrorResponse(_ int, message string) (string, []byte) {
+	body, _ := json.Marshal(map[string]any{
+		"error": message,
+	})
+	return "application/json", body
+}

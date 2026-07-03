@@ -7,6 +7,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -85,4 +86,17 @@ func (openaiProvider) Price(model string, inTok, outTok int) float64 {
 		pr = priceGPT4o
 	}
 	return float64(inTok)/1e6*pr.inPerM + float64(outTok)/1e6*pr.outPerM
+}
+
+// ErrorResponse renders OpenAI's native error envelope. The error type is
+// "insufficient_quota" for HTTP 403 and "api_error" otherwise.
+func (openaiProvider) ErrorResponse(status int, message string) (string, []byte) {
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    openaiwire.ErrType(status),
+			"code":    nil,
+		},
+	})
+	return "application/json", body
 }

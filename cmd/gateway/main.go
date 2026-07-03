@@ -16,7 +16,10 @@ import (
 	"time"
 
 	"github.com/Fraser-Isbester/inferenced/internal/config"
+	"github.com/Fraser-Isbester/inferenced/internal/enforce"
+	"github.com/Fraser-Isbester/inferenced/internal/identity"
 	"github.com/Fraser-Isbester/inferenced/internal/proxy"
+	"github.com/Fraser-Isbester/inferenced/internal/store"
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
 )
 
@@ -51,14 +54,52 @@ func main() {
 
 	reg := cfg.Registry()
 	log.Printf("providers enabled: %s", strings.Join(reg.Names(), ", "))
-	rp := proxy.New(reg, telemetry.NewStdoutSink(), proxy.Options{
+
+	// Build the sink chain. Stdout is always on; the SQLite ledger is added when
+	// storage is enabled or when enforcement is on (enforcement needs the ledger
+	// to answer spend queries).
+	sinks := []telemetry.Sink{telemetry.NewStdoutSink()}
+	var st *store.Store
+	if cfg.StorageEnabled() || cfg.Enforcement.Enabled {
+		path := cfg.Storage.Path
+		if path == "" {
+			p, err := store.DefaultPath()
+			if err != nil {
+				log.Fatalf("store path: %v", err)
+			}
+			path = p
+		}
+		opened, err := store.Open(path)
+		if err != nil {
+			log.Fatalf("store open %s: %v", path, err)
+		}
+		st = opened
+		defer func() { _ = st.Close() }()
+		sinks = append(sinks, st)
+	}
+
+	sink := telemetry.MultiSink(sinks...)
+	rp := proxy.New(reg, sink, proxy.Options{
 		DeveloperID: cfg.Developer.ID,
 		Team:        cfg.Developer.Team,
 	})
 
+	var handler http.Handler = rp
+	if cfg.Enforcement.Enabled {
+		limits, err := cfg.EnforceLimits()
+		if err != nil {
+			log.Fatalf("enforcement limits: %v", err)
+		}
+		eng := enforce.NewEngine(limits, st.Spend, time.Now)
+		resolve := func(r *http.Request) (string, string) {
+			return identity.Resolve(r, cfg.Developer.ID, cfg.Developer.Team)
+		}
+		handler = enforce.Middleware(eng, resolve, reg, cfg.EnforceAction(), cfg.BlockStatus())(handler)
+	}
+
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: rp,
+		Handler: handler,
 	}
 
 	// Cancel the context on SIGINT/SIGTERM to trigger graceful shutdown.

@@ -71,6 +71,9 @@ type Provider interface {
 	NewStreamParser(contentType string) StreamParser
 	// Price returns the cost in USD for the given model and token counts.
 	Price(model string, inTok, outTok int) float64
+	// ErrorResponse renders a provider-native error envelope for the given HTTP
+	// status and message, returning the JSON Content-Type and marshaled body.
+	ErrorResponse(status int, message string) (contentType string, body []byte)
 }
 
 // Registry holds the set of registered providers and resolves which one should

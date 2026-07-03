@@ -9,6 +9,7 @@
 package openaicompat
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -113,4 +114,17 @@ func (p compatProvider) lookup(model string) (Price, bool) {
 		return pr, true
 	}
 	return Price{}, false
+}
+
+// ErrorResponse renders the shared OpenAI-style error envelope. The error type
+// is "insufficient_quota" for HTTP 403 and "api_error" otherwise.
+func (compatProvider) ErrorResponse(status int, message string) (string, []byte) {
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    openaiwire.ErrType(status),
+			"code":    nil,
+		},
+	})
+	return "application/json", body
 }

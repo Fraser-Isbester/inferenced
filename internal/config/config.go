@@ -10,11 +10,14 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Fraser-Isbester/inferenced/internal/enforce"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/gemini"
@@ -28,9 +31,50 @@ const defaultListen = "127.0.0.1:8766"
 
 // Config is the parsed inferenced configuration.
 type Config struct {
-	Listen    string    `yaml:"listen"`
-	Developer Developer `yaml:"developer"`
-	Providers Providers `yaml:"providers"`
+	Listen      string      `yaml:"listen"`
+	Developer   Developer   `yaml:"developer"`
+	Providers   Providers   `yaml:"providers"`
+	Storage     Storage     `yaml:"storage"`
+	Enforcement Enforcement `yaml:"enforcement"`
+}
+
+// Storage configures the local SQLite spend ledger.
+type Storage struct {
+	// Enabled toggles the ledger. A nil value means enabled (the default);
+	// set it to false to disable persistence entirely.
+	Enabled *bool `yaml:"enabled"`
+	// Path is the SQLite database file. Empty means use the default location.
+	Path string `yaml:"path"`
+}
+
+// Enforcement configures local spend-limit enforcement.
+type Enforcement struct {
+	// Enabled turns spend enforcement on. Enforcement requires the ledger.
+	Enabled bool `yaml:"enabled"`
+	// Action selects the over-limit behavior: "block" (the default) or "warn".
+	Action string `yaml:"action"`
+	// BlockStatus is the HTTP status returned when blocking. Defaults to 402
+	// (Payment Required) — coding agents read that as a quota/billing error
+	// rather than an auth failure (401/403 make Claude Code prompt /login) or a
+	// retryable one (429).
+	BlockStatus int `yaml:"block_status"`
+	// Limits is the set of spend limits to evaluate on every request.
+	Limits []LimitYAML `yaml:"limits"`
+}
+
+// LimitYAML is the YAML shape of a single spend limit.
+type LimitYAML struct {
+	// Scope is the attribution dimension: "team" or "developer".
+	Scope string `yaml:"scope"`
+	// ID is the specific team or developer, or "*" to match all.
+	ID string `yaml:"id"`
+	// Period is the budget window: "day", "month", or "rolling".
+	Period string `yaml:"period"`
+	// Window is the rolling-window duration (e.g. "168h"); required only when
+	// Period is "rolling".
+	Window string `yaml:"window"`
+	// LimitUSD is the spend ceiling in US dollars.
+	LimitUSD float64 `yaml:"limit_usd"`
 }
 
 // Developer holds identity attribution overrides.
@@ -157,6 +201,77 @@ func (c *Config) Registry() *provider.Registry {
 	}
 
 	return reg
+}
+
+// StorageEnabled reports whether the local ledger should run. It is on unless
+// Storage.Enabled is explicitly set to false.
+func (c *Config) StorageEnabled() bool {
+	return enabled(c.Storage.Enabled)
+}
+
+// EnforceLimits maps the configured LimitYAML entries into enforce.Limit values.
+// It validates that each scope is one of {team, developer} and each period is
+// one of {day, month, rolling}, and parses Window (required only for rolling
+// periods) via time.ParseDuration.
+func (c *Config) EnforceLimits() ([]enforce.Limit, error) {
+	switch c.Enforcement.Action {
+	case "", string(enforce.ActionBlock), string(enforce.ActionWarn):
+	default:
+		return nil, fmt.Errorf("invalid enforcement action %q (want block or warn)", c.Enforcement.Action)
+	}
+
+	limits := make([]enforce.Limit, 0, len(c.Enforcement.Limits))
+	for i, l := range c.Enforcement.Limits {
+		switch l.Scope {
+		case string(enforce.ScopeTeam), string(enforce.ScopeDeveloper):
+		default:
+			return nil, fmt.Errorf("limit %d: invalid scope %q (want team or developer)", i, l.Scope)
+		}
+
+		switch l.Period {
+		case string(enforce.PeriodDay), string(enforce.PeriodMonth), string(enforce.PeriodRolling):
+		default:
+			return nil, fmt.Errorf("limit %d: invalid period %q (want day, month, or rolling)", i, l.Period)
+		}
+
+		var window time.Duration
+		if l.Period == string(enforce.PeriodRolling) {
+			if l.Window == "" {
+				return nil, fmt.Errorf("limit %d: window is required for rolling period", i)
+			}
+			d, err := time.ParseDuration(l.Window)
+			if err != nil {
+				return nil, fmt.Errorf("limit %d: parse window %q: %w", i, l.Window, err)
+			}
+			window = d
+		}
+
+		limits = append(limits, enforce.Limit{
+			Scope:    enforce.Scope(l.Scope),
+			ID:       l.ID,
+			Period:   enforce.Period(l.Period),
+			Window:   window,
+			LimitUSD: l.LimitUSD,
+		})
+	}
+	return limits, nil
+}
+
+// EnforceAction returns the configured over-limit action, defaulting to block.
+// EnforceLimits validates the raw value, so callers should invoke it first.
+func (c *Config) EnforceAction() enforce.Action {
+	if c.Enforcement.Action == "" {
+		return enforce.ActionBlock
+	}
+	return enforce.Action(c.Enforcement.Action)
+}
+
+// BlockStatus returns the HTTP status used when blocking, defaulting to 402.
+func (c *Config) BlockStatus() int {
+	if c.Enforcement.BlockStatus == 0 {
+		return http.StatusPaymentRequired
+	}
+	return c.Enforcement.BlockStatus
 }
 
 // enabled reports whether a nil-defaults-true toggle is on.

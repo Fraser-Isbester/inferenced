@@ -295,3 +295,34 @@ func (anthropicProvider) Price(model string, inTok, outTok int) float64 {
 	}
 	return float64(inTok)/1e6*pr.inPerM + float64(outTok)/1e6*pr.outPerM
 }
+
+// ErrorResponse renders Anthropic's native error envelope, mapping the HTTP
+// status to Anthropic's error type. A budget block (402) maps to
+// "invalid_request_error" — the same terminal, non-retriable, non-auth type
+// Anthropic returns for "credit balance too low".
+func (anthropicProvider) ErrorResponse(status int, message string) (string, []byte) {
+	body, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    anthropicErrType(status),
+			"message": message,
+		},
+	})
+	return "application/json", body
+}
+
+// anthropicErrType maps an HTTP status to Anthropic's native error type string.
+func anthropicErrType(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication_error"
+	case status == http.StatusForbidden:
+		return "permission_error"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= 500:
+		return "api_error"
+	default:
+		return "invalid_request_error"
+	}
+}

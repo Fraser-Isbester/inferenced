@@ -53,6 +53,25 @@ type Sink interface {
 	Emit(Event)
 }
 
+// MultiSink returns a fanout Sink whose Emit forwards the event to each of the
+// given sinks in order. Nil sinks are skipped, so callers may pass conditionally
+// constructed sinks without guarding.
+func MultiSink(sinks ...Sink) Sink {
+	return multiSink(sinks)
+}
+
+// multiSink fans an event out to a fixed set of underlying sinks.
+type multiSink []Sink
+
+// Emit forwards the event to each non-nil underlying sink.
+func (m multiSink) Emit(e Event) {
+	for _, s := range m {
+		if s != nil {
+			s.Emit(e)
+		}
+	}
+}
+
 // StdoutSink is a Sink that prints a human-readable summary line to stdout. It
 // guards concurrent Emit calls with a mutex.
 type StdoutSink struct {

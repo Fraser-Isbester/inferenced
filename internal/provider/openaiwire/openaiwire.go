@@ -100,6 +100,23 @@ func contentTextLen(raw json.RawMessage) int {
 	return 0
 }
 
+// ErrType maps an HTTP status to an OpenAI-style error "type" string. A budget
+// block (402) maps to "insufficient_quota" — OpenAI's terminal quota-exceeded
+// type — so coding agents treat it as a billing stop rather than an auth
+// failure or a retryable error.
+func ErrType(status int) string {
+	switch {
+	case status == http.StatusPaymentRequired:
+		return "insufficient_quota"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= 500:
+		return "api_error"
+	default:
+		return "invalid_request_error"
+	}
+}
+
 // NewParser returns a StreamParser for the given response Content-Type.
 func NewParser(contentType string) provider.StreamParser {
 	return &parser{
