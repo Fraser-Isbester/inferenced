@@ -48,32 +48,32 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 	rp.FlushInterval = -1
 	rp.Transport = &http.Transport{ForceAttemptHTTP2: true}
 
-	rp.Director = func(req *http.Request) {
-		p, ok := reg.Detect(req)
+	rp.Rewrite = func(pr *httputil.ProxyRequest) {
+		out := pr.Out
+		p, ok := reg.Detect(pr.In)
 		if !ok {
-			// Unknown traffic: best-effort passthrough. Point at the request's
-			// own host if we have one so the proxy does not crash on a nil URL.
-			if req.URL != nil && req.URL.Scheme == "" {
-				req.URL.Scheme = "https"
-				if req.URL.Host == "" {
-					req.URL.Host = req.Host
-				}
+			// Unknown traffic: best-effort passthrough to the request's own host
+			// so the proxy does not fail on a relative outbound URL.
+			out.URL.Scheme = "https"
+			if out.URL.Host == "" {
+				out.URL.Host = pr.In.Host
 			}
+			out.Host = out.URL.Host
 			return
 		}
 
 		host := p.UpstreamHost()
-		req.URL.Scheme = "https"
-		req.URL.Host = host
+		out.URL.Scheme = "https"
+		out.URL.Host = host
 		// Set both so the upstream sees the correct Host header.
-		req.Host = host
+		out.Host = host
 
 		// Read and restore the body so ParseRequest can inspect it while the
 		// forwarded request still carries a replayable body.
 		var body []byte
-		if req.Body != nil {
-			b, err := io.ReadAll(req.Body)
-			req.Body.Close()
+		if out.Body != nil {
+			b, err := io.ReadAll(out.Body)
+			_ = out.Body.Close()
 			body = b // keep whatever was read, even on a partial read
 			if err != nil {
 				// Surface the read failure rather than silently forwarding a
@@ -81,15 +81,15 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 				fmt.Printf("[WARN]     --> request body read error: %v\n", err)
 			}
 		}
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.GetBody = func() (io.ReadCloser, error) {
+		out.Body = io.NopCloser(bytes.NewReader(body))
+		out.GetBody = func() (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(body)), nil
 		}
-		req.ContentLength = int64(len(body))
+		out.ContentLength = int64(len(body))
 
 		info := p.ParseRequest(body)
 
-		cred := identity.Credential(req)
+		cred := identity.Credential(out)
 		devID := identity.DeveloperID(cred)
 		reqID := fmt.Sprintf("%d", reqCounter.Add(1))
 		start := time.Now()
@@ -100,20 +100,20 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 			Provider:        p.Name(),
 			DeveloperID:     devID,
 			OSUser:          identity.OSUser(),
-			Method:          req.Method,
-			Path:            req.URL.Path,
+			Method:          out.Method,
+			Path:            out.URL.Path,
 			Model:           info.Model,
 			Stream:          info.Stream,
 			InputTokens:     info.ApproxInputTokens,
 		}
 
-		logx.Request(reqID, req.Method, req.URL.Path, p.Name(), info.Model, devID, logx.Redact(cred))
+		logx.Request(reqID, out.Method, out.URL.Path, p.Name(), info.Model, devID, logx.Redact(cred))
 
-		ctx := req.Context()
+		ctx := out.Context()
 		ctx = context.WithValue(ctx, eventKey, ev)
 		ctx = context.WithValue(ctx, providerKey, p)
 		ctx = context.WithValue(ctx, startKey, start)
-		*req = *req.WithContext(ctx)
+		pr.Out = out.WithContext(ctx)
 	}
 
 	rp.ModifyResponse = func(resp *http.Response) error {
@@ -141,7 +141,7 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 		go func() {
 			// Drain the tee'd bytes into the parser. io.Copy returns when the
 			// writer closes pw (normal EOF) or the pipe is broken.
-			io.Copy(parser, pr)
+			_, _ = io.Copy(parser, pr)
 
 			u := parser.Finish()
 			// Prefer the parser's authoritative input count; otherwise keep the
@@ -162,7 +162,7 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 			sink.Emit(*ev)
 
 			// Release any pending writer; further reads see EOF.
-			pr.Close()
+			_ = pr.Close()
 		}()
 
 		resp.Body = &teeBody{
@@ -217,6 +217,6 @@ func (t *teeBody) Read(p []byte) (int, error) {
 func (t *teeBody) Close() error {
 	err := t.upBody.Close()
 	// Closing the writer signals EOF to the observer's io.Copy(parser, pr).
-	t.pw.Close()
+	_ = t.pw.Close()
 	return err
 }
