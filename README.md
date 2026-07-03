@@ -57,7 +57,7 @@ inferenced install
 | `config path` | Print the config path in effect. |
 | `config show` | Print the effective config as YAML. |
 | `spend` | Summarize recorded spend from the local ledger (`--period day\|month\|rolling`, `--window`, `--since`). |
-| `ui` | Local web dashboard (coming soon). |
+| `ui` | Serve the local web dashboard — spend summaries + a live request feed (`--port`, default 8788). |
 | `version` | Print the build version. |
 
 ## Quickstart
@@ -186,6 +186,16 @@ enforcement:
 **Block:** when a limit reaches `block_at` and `action: block`, the request is denied (never forwarded) with a **provider-shaped error envelope** so the calling client surfaces a native, non-retriable error. The status defaults to **402 Payment Required** (`block_status`), which coding agents read as a quota/billing stop — deliberately **not** 401/403 (Claude Code maps those to "run `/login`") or 429 (treated as retryable rate-limiting). The error type is mapped per provider for a 402 budget block (Anthropic `invalid_request_error`, OpenAI `insufficient_quota`, Gemini `FAILED_PRECONDITION`).
 
 With `action: warn`, nothing is enforced — every block/downgrade intent is logged (`[LIMIT] warn …`) and the request forwarded unchanged, so you can dry-run a policy. Enabling enforcement automatically starts the ledger even if `storage.enabled` is false, since enforcement reads from it. Spend-query failures **fail open** (the request is allowed) so a ledger hiccup never blocks a developer.
+
+## Dashboard
+
+`inferenced ui` serves a read-only local dashboard (default `http://127.0.0.1:8788`) that reads the SQLite ledger directly — run it alongside `inferenced serve`:
+
+```bash
+inferenced ui            # then open http://127.0.0.1:8788
+```
+
+It shows spend totals (by model / team, per day/month/rolling window) and a **live feed** of requests streamed over Server-Sent Events (a ~1s tail of new ledger rows). It is read-only — no config editing — and binds to localhost only. `GET /api/config` exposes the effective config as YAML for inspection.
 
 ## OpenTelemetry export
 

@@ -219,6 +219,92 @@ func (s *Store) Spend(scope, id string, since time.Time) (float64, error) {
 	return total, nil
 }
 
+// EventRow is a single recorded request as surfaced to the dashboard, including
+// its SQLite rowid so callers can tail new rows.
+type EventRow struct {
+	RowID           int64   `json:"row_id"`
+	TimestampUnixMs int64   `json:"ts_unix_ms"`
+	Provider        string  `json:"provider"`
+	Model           string  `json:"model"`
+	DeveloperID     string  `json:"developer_id"`
+	Team            string  `json:"team"`
+	Status          int     `json:"status"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	CostUSD         float64 `json:"cost_usd"`
+	DurationMs      int64   `json:"duration_ms"`
+}
+
+// eventCols is the fixed SELECT list shared by the event-row queries.
+const eventCols = `rowid, ts_unix_ms, provider, model, developer_id, team, status, input_tokens, output_tokens, cost_usd, duration_ms`
+
+// scanEventRows scans a result set produced with eventCols into EventRow values.
+func scanEventRows(rows *sql.Rows) ([]EventRow, error) {
+	defer func() { _ = rows.Close() }()
+	var out []EventRow
+	for rows.Next() {
+		var r EventRow
+		if err := rows.Scan(&r.RowID, &r.TimestampUnixMs, &r.Provider, &r.Model,
+			&r.DeveloperID, &r.Team, &r.Status, &r.InputTokens, &r.OutputTokens,
+			&r.CostUSD, &r.DurationMs); err != nil {
+			return nil, fmt.Errorf("scan event row: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate event rows: %w", err)
+	}
+	return out, nil
+}
+
+// RecentEvents returns the most recent up-to-limit events in ascending rowid
+// order, plus the current maximum rowid in the table (0 when empty). It is used
+// for the dashboard's initial load; the returned maxRowID seeds EventsSince for
+// live tailing even when the table has more than limit rows.
+func (s *Store) RecentEvents(limit int) ([]EventRow, int64, error) {
+	// #nosec G202 -- eventCols is a fixed literal; limit is bound as a parameter.
+	q := `SELECT ` + eventCols + ` FROM events ORDER BY rowid DESC LIMIT ?`
+	rows, err := s.db.Query(q, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query recent events: %w", err)
+	}
+	desc, err := scanEventRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	// Reverse to ascending rowid order for display; the first DESC row is the max.
+	var maxRowID int64
+	if len(desc) > 0 {
+		maxRowID = desc[0].RowID
+	}
+	out := make([]EventRow, len(desc))
+	for i, r := range desc {
+		out[len(desc)-1-i] = r
+	}
+	return out, maxRowID, nil
+}
+
+// EventsSince returns up-to-limit events with rowid greater than sinceRowID in
+// ascending order, plus the new maximum rowid to poll from next (sinceRowID when
+// no new rows). It powers the dashboard's live tail.
+func (s *Store) EventsSince(sinceRowID int64, limit int) ([]EventRow, int64, error) {
+	// #nosec G202 -- eventCols is a fixed literal; args are bound as parameters.
+	q := `SELECT ` + eventCols + ` FROM events WHERE rowid > ? ORDER BY rowid ASC LIMIT ?`
+	rows, err := s.db.Query(q, sinceRowID, limit)
+	if err != nil {
+		return nil, sinceRowID, fmt.Errorf("query events since %d: %w", sinceRowID, err)
+	}
+	out, err := scanEventRows(rows)
+	if err != nil {
+		return nil, sinceRowID, err
+	}
+	maxRowID := sinceRowID
+	if n := len(out); n > 0 {
+		maxRowID = out[n-1].RowID // ascending, so last is max
+	}
+	return out, maxRowID, nil
+}
+
 // ReportRow is one grouped spend total keyed by a dimension value (a developer
 // id, team, or model), with its aggregate cost and request count.
 type ReportRow struct {
