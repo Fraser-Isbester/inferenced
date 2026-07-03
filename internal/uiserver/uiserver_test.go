@@ -27,13 +27,15 @@ func TestUIServer(t *testing.T) {
 
 var _ = Describe("Handler", func() {
 	var (
-		st  *store.Store
-		srv *httptest.Server
+		st      *store.Store
+		srv     *httptest.Server
+		cfgPath string
 	)
 
 	BeforeEach(func() {
+		dir := GinkgoT().TempDir()
 		var err error
-		st, err = store.Open(filepath.Join(GinkgoT().TempDir(), "ui.db"))
+		st, err = store.Open(filepath.Join(dir, "ui.db"))
 		Expect(err).NotTo(HaveOccurred())
 		st.Emit(telemetry.Event{
 			RequestID: "1", TimestampUnixMs: time.Now().UnixMilli(),
@@ -41,7 +43,20 @@ var _ = Describe("Handler", func() {
 			Team: "platform", Status: 200, InputTokens: 10, OutputTokens: 5, CostUSD: 1.5,
 			Metadata: `{"files":["main.go"],"commands":["git status"]}`,
 		})
-		srv = httptest.NewServer(uiserver.Handler(st, config.Default()))
+
+		// A config with two limits so the gauge/rules endpoints have data.
+		cfgPath = filepath.Join(dir, "inferenced.yaml")
+		cfg := config.Default()
+		cfg.Enforcement = config.Enforcement{
+			Enabled: true,
+			Limits: []config.LimitYAML{
+				{Scope: "team", ID: "platform", Period: "day", LimitUSD: 5},
+				{Scope: "developer", ID: "*", Period: "day", LimitUSD: 10, DowngradeAt: 0.8, BlockAt: 1.2},
+			},
+		}
+		Expect(cfg.Save(cfgPath)).To(Succeed())
+
+		srv = httptest.NewServer(uiserver.Handler(st, cfgPath))
 		DeferCleanup(func() {
 			srv.Close()
 			_ = st.Close()
@@ -99,6 +114,58 @@ var _ = Describe("Handler", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = resp.Body.Close() }()
 		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+	})
+
+	It("returns spend-vs-limit gauges at /api/limits", func() {
+		resp, err := http.Get(srv.URL + "/api/limits")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		var gauges []map[string]any
+		Expect(json.NewDecoder(resp.Body).Decode(&gauges)).To(Succeed())
+		Expect(gauges).To(HaveLen(2))
+		// team/platform limit $5, spent $1.5 by the seeded event, blocks at $5.
+		Expect(gauges[0]).To(HaveKeyWithValue("id", "platform"))
+		Expect(gauges[0]).To(HaveKeyWithValue("spent_usd", 1.5))
+		Expect(gauges[0]).To(HaveKeyWithValue("block_threshold_usd", 5.0))
+		// developer/* soft limit: downgrade at $8, block at $12.
+		Expect(gauges[1]).To(HaveKeyWithValue("downgrade_threshold_usd", 8.0))
+		Expect(gauges[1]).To(HaveKeyWithValue("block_threshold_usd", 12.0))
+	})
+
+	It("round-trips edited rules through PUT /api/rules", func() {
+		body := `{"enabled":true,"action":"block","limits":[{"scope":"team","id":"platform","period":"day","limit_usd":50}]}`
+		req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/rules", strings.NewReader(body))
+		Expect(err).NotTo(HaveOccurred())
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
+
+		// The saved file must reflect the edit.
+		saved, err := config.Load(cfgPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(saved.Enforcement.Limits).To(HaveLen(1))
+		Expect(saved.Enforcement.Limits[0].LimitUSD).To(Equal(50.0))
+	})
+
+	It("rejects an invalid rules edit with 400 and leaves the file untouched", func() {
+		before, err := config.Load(cfgPath)
+		Expect(err).NotTo(HaveOccurred())
+
+		// downgrade_at >= block_at is invalid.
+		body := `{"enabled":true,"limits":[{"scope":"team","id":"x","period":"day","limit_usd":10,"downgrade_at":1.5,"block_at":1.0}]}`
+		req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/rules", strings.NewReader(body))
+		Expect(err).NotTo(HaveOccurred())
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+
+		after, err := config.Load(cfgPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(after.Enforcement.Limits).To(HaveLen(len(before.Enforcement.Limits)))
 	})
 
 	It("exposes the config read-only as YAML", func() {

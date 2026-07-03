@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -110,18 +111,31 @@ func runServe(configPath, port string) {
 		Pricing:     resolver,
 	})
 
-	var handler http.Handler = rp
-	if cfg.Enforcement.Enabled {
-		limits, err := cfg.EnforceLimits()
-		if err != nil {
-			log.Fatalf("enforcement limits: %v", err)
-		}
-		eng := enforce.NewEngine(limits, st.Spend, time.Now)
-		resolve := func(r *http.Request) (string, string) {
-			return identity.Resolve(r, cfg.Developer.ID, cfg.Developer.Team)
-		}
-		handler = enforce.Middleware(eng, resolve, reg, cfg.EnforceAction(), cfg.BlockStatus(), cfg.DowngradeRules())(handler)
+	// spendFn is the enforcement engine's spend source. When storage is off it
+	// returns 0, so any live-enabled enforcement is a no-op (warned below).
+	spendFn := func(scope, id string, since time.Time) (float64, error) { return 0, nil }
+	if st != nil {
+		spendFn = st.Spend
 	}
+	if cfg.Enforcement.Enabled && st == nil {
+		log.Printf("enforcement is enabled but storage is off; spend can't be measured (no-op) — enable storage")
+	}
+	resolve := func(r *http.Request) (string, string) {
+		return identity.Resolve(r, cfg.Developer.ID, cfg.Developer.Team)
+	}
+
+	initial, err := buildRuleset(cfg, spendFn)
+	if err != nil {
+		log.Fatalf("enforcement: %v", err)
+	}
+	var current atomic.Pointer[enforce.Ruleset]
+	current.Store(&initial)
+
+	// Enforcement is always installed; a disabled config just allows everything,
+	// and a config edit can flip it on live via the watcher below.
+	handler := enforce.DynamicMiddleware(resolve, reg, func() enforce.Ruleset {
+		return *current.Load()
+	})(http.Handler(rp))
 	// Reject undetected traffic outermost, before enforcement or metering, so a
 	// stray/non-inference request 404s instead of being spend-checked or dialed.
 	handler = proxy.Gate(reg)(handler)
@@ -134,6 +148,21 @@ func runServe(configPath, port string) {
 	// Cancel the context on SIGINT/SIGTERM to trigger graceful shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Hot-reload: watch the resolved config file and swap the enforcement ruleset
+	// when it changes (e.g. edited from the dashboard). Invalid configs are logged
+	// and ignored, keeping the last-good ruleset. Run `serve` and `ui` with the
+	// same --config so they agree on the path.
+	cfgPath := resolveConfigPath(configPath)
+	go watchConfig(ctx, cfgPath, func(c *config.Config) {
+		rs, err := buildRuleset(c, spendFn)
+		if err != nil {
+			log.Printf("config reload rejected (%s): %v", cfgPath, err)
+			return
+		}
+		current.Store(&rs)
+		log.Printf("config reloaded from %s", cfgPath)
+	})
 
 	errCh := make(chan error, 1)
 	go func() {

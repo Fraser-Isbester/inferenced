@@ -1,8 +1,10 @@
-// Package uiserver serves the read-only local dashboard for inferenced: spend
-// summaries and a live feed of metered requests. It reads the SQLite ledger
-// directly (the shared source of truth) rather than sharing in-memory state
-// with the running gateway, so "realtime" is a ~1s tail of new ledger rows over
-// Server-Sent Events. Config is exposed read-only; there is no write path.
+// Package uiserver serves the local dashboard for inferenced: spend summaries, a
+// live feed of metered requests, spend-vs-limit gauges, and a rules editor. It
+// reads the SQLite ledger directly (the shared source of truth) rather than
+// sharing in-memory state with the running gateway, so "realtime" is a ~1s tail
+// of new ledger rows over Server-Sent Events. Config is read fresh from disk per
+// request (so gauges/editor reflect what the gateway enforces); editing writes
+// the config file, which a running `serve` hot-reloads.
 package uiserver
 
 import (
@@ -36,11 +38,13 @@ type Store interface {
 	RecentEvents(limit int) ([]store.EventRow, int64, error)
 	EventsSince(sinceRowID int64, limit int) ([]store.EventRow, int64, error)
 	EventMetadata(rowID int64) (string, error)
+	Spend(scope, id string, since time.Time) (float64, error)
 }
 
-// Handler builds the dashboard HTTP handler. st is the ledger read handle; cfg
-// is the effective config surfaced read-only at /api/config.
-func Handler(st Store, cfg *config.Config) http.Handler {
+// Handler builds the dashboard HTTP handler. st is the ledger read handle;
+// cfgPath is the resolved config file path, loaded fresh per request so gauges
+// and the editor reflect what the gateway enforces, and written on edit.
+func Handler(st Store, cfgPath string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +67,11 @@ func Handler(st Store, cfg *config.Config) http.Handler {
 	})
 
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		b, err := yaml.Marshal(cfg)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -70,6 +79,31 @@ func Handler(st Store, cfg *config.Config) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 		_, _ = w.Write(b)
+	})
+
+	mux.HandleFunc("/api/limits", func(w http.ResponseWriter, _ *http.Request) {
+		gauges, err := limitGauges(st, cfgPath, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, gauges)
+	})
+
+	mux.HandleFunc("/api/rules", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, rulesFrom(cfg))
+		case http.MethodPut:
+			handleRulesPut(w, r, cfgPath)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 
 	mux.HandleFunc("/api/event", func(w http.ResponseWriter, r *http.Request) {

@@ -212,6 +212,44 @@ type boomError struct{}
 
 func (*boomError) Error() string { return "boom" }
 
+var _ = Describe("DynamicMiddleware", func() {
+	now := time.Date(2026, time.July, 2, 15, 30, 0, 0, time.UTC)
+	resolve := func(*http.Request) (string, string) { return "dev-1", "team-a" }
+	newReg := func() *provider.Registry {
+		reg := provider.NewRegistry()
+		reg.Register(anthropic.New())
+		return reg
+	}
+
+	blocking := func() enforce.Ruleset {
+		eng := enforce.NewEngine(
+			[]enforce.Limit{{Scope: enforce.ScopeDeveloper, ID: "*", Period: enforce.PeriodDay, LimitUSD: 1}},
+			func(string, string, time.Time) (float64, error) { return 99, nil }, fixedClock(now))
+		return enforce.Ruleset{Engine: eng, Action: enforce.ActionBlock, BlockStatus: http.StatusPaymentRequired}
+	}
+	allowing := func() enforce.Ruleset {
+		return enforce.Ruleset{Engine: enforce.NewEngine(nil, func(string, string, time.Time) (float64, error) { return 0, nil }, fixedClock(now)), Action: enforce.ActionBlock}
+	}
+
+	It("re-reads the ruleset per request so a hot swap flips enforcement", func() {
+		current := blocking()
+		inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		h := enforce.DynamicMiddleware(resolve, newReg(), func() enforce.Ruleset { return current })(inner)
+
+		do := func() int {
+			req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", nil)
+			req.Header.Set("anthropic-version", "2023-06-01")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			return rec.Code
+		}
+
+		Expect(do()).To(Equal(http.StatusPaymentRequired)) // blocking ruleset
+		current = allowing()
+		Expect(do()).To(Equal(http.StatusOK)) // swapped live, no rebuild
+	})
+})
+
 var _ = Describe("Engine.Check downgrade thresholds", func() {
 	now := time.Date(2026, time.July, 2, 15, 30, 0, 0, time.UTC)
 	tiered := []enforce.Limit{{

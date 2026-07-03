@@ -62,10 +62,14 @@ func runUI(configPath string, port int) error {
 	}
 	defer func() { _ = st.Close() }()
 
+	// The editor and gauges read/write the resolved config file; use the same
+	// resolution as `serve` so both agree on which file to watch and edit.
+	cfgPath := resolveConfigPath(configPath)
+
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           uiserver.Handler(st, cfg),
+		Handler:           uiserver.Handler(st, cfgPath),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

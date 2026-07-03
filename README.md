@@ -195,7 +195,7 @@ With `action: warn`, nothing is enforced — every block/downgrade intent is log
 inferenced ui            # then open http://127.0.0.1:8788
 ```
 
-It shows spend totals (by model / team, per day/month/rolling window) and a **live feed** of requests streamed over Server-Sent Events (a ~1s tail of new ledger rows). It is read-only — no config editing — and binds to localhost only. `GET /api/config` exposes the effective config as YAML for inspection.
+It shows spend totals (by model / team, per day/month/rolling window), a **live feed** of requests over Server-Sent Events (click a row for its metadata), **spend-vs-limit gauges** for every configured limit (with downgrade/block markers), and an **editable rules table**. Saving rules writes the config file; a running `serve` **hot-reloads** it within ~2s (mtime poll) and atomically swaps the enforcement engine — no restart. Run `serve` and `ui` with the **same `--config`** so they agree on the file. Binds to localhost only.
 
 ## Request metadata
 

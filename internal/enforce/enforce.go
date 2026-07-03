@@ -232,15 +232,35 @@ func periodStart(l Limit, now time.Time) time.Time {
 //
 // rules is the ordered downgrade map (first substring match wins).
 func Middleware(e *Engine, resolve ResolveFunc, reg *provider.Registry, action Action, blockStatus int, rules []Rule) func(http.Handler) http.Handler {
-	if blockStatus == 0 {
-		blockStatus = http.StatusPaymentRequired
-	}
+	rs := Ruleset{Engine: e, Action: action, BlockStatus: blockStatus, Rules: rules}
+	return DynamicMiddleware(resolve, reg, func() Ruleset { return rs })
+}
+
+// Ruleset is the enforcement configuration evaluated for a single request. It
+// bundles the engine (limits), the over-limit action, the block status, and the
+// downgrade rules so the whole set can be swapped atomically on config reload.
+type Ruleset struct {
+	Engine      *Engine
+	Action      Action
+	BlockStatus int
+	Rules       []Rule
+}
+
+// DynamicMiddleware is like Middleware but reads the current Ruleset per request
+// via get, so a running gateway can hot-reload enforcement (swap the Ruleset)
+// without rebuilding the handler chain. get must be safe for concurrent use and
+// must return a Ruleset with a non-nil Engine.
+func DynamicMiddleware(resolve ResolveFunc, reg *provider.Registry, get func() Ruleset) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			devID, team := resolve(r)
-			d := e.Check(devID, team)
+			rs := get()
+			blockStatus := rs.BlockStatus
+			if blockStatus == 0 {
+				blockStatus = http.StatusPaymentRequired
+			}
+			d := rs.Engine.Check(resolve(r))
 
-			if action == ActionWarn {
+			if rs.Action == ActionWarn {
 				switch {
 				case !d.Allowed:
 					log.Printf("[LIMIT] warn %s", violationMessage(d))
@@ -257,7 +277,7 @@ func Middleware(e *Engine, resolve ResolveFunc, reg *provider.Registry, action A
 			}
 
 			if d.Downgrade {
-				applyDowngrade(r, reg, rules, d)
+				applyDowngrade(r, reg, rs.Rules, d)
 			}
 			next.ServeHTTP(w, r)
 		})

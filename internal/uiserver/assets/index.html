@@ -31,6 +31,17 @@
   tbody tr.clickable { cursor:pointer; }
   tbody tr.clickable:hover td { background:rgba(110,168,254,.06); }
   pre.meta { margin:0; padding:10px 12px; background:#0b0d12; border-radius:6px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted); max-height:280px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  .gaugerow { margin-bottom:14px; }
+  .gaugelabel { display:flex; justify-content:space-between; font-size:13px; margin-bottom:4px; }
+  .gauge { position:relative; height:10px; background:var(--line); border-radius:5px; }
+  .gauge-fill { height:100%; border-radius:5px; transition:width .3s ease; }
+  .gauge .tick { position:absolute; top:-3px; width:2px; height:16px; background:var(--muted); }
+  .gauge .tick.block { background:#f87171; }
+  button { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  input.cell { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:3px 6px; width:100%; font:inherit; box-sizing:border-box; }
+  td .del { color:#f87171; cursor:pointer; user-select:none; }
+  .ok { color:#4ade80; }
 </style>
 </head>
 <body>
@@ -52,6 +63,25 @@
     <div class="card"><div class="k">Total spend</div><div class="v" id="total-usd">$0.00</div></div>
     <div class="card"><div class="k">Requests</div><div class="v" id="total-reqs">0</div></div>
   </div>
+
+  <section>
+    <h2>Limits</h2>
+    <div id="limits" class="muted">no limits configured</div>
+  </section>
+
+  <section>
+    <h2>Edit rules</h2>
+    <table>
+      <thead><tr><th>Scope</th><th>ID</th><th>Period</th><th class="num">Limit&nbsp;$</th><th class="num">Downgrade&nbsp;@</th><th class="num">Block&nbsp;@</th><th></th></tr></thead>
+      <tbody id="rules-body"></tbody>
+    </table>
+    <div class="controls" style="margin-top:10px">
+      <button id="add-limit" type="button">+ Add limit</button>
+      <button id="save-rules" type="button">Save rules</button>
+      <span id="rules-msg" class="muted"></span>
+    </div>
+    <p class="muted" style="font-size:12px">Thresholds are fractions of the limit (e.g. downgrade @ 0.8, block @ 1.2). Leave blank to block at 100%. A running <code>serve</code> applies saved changes within a couple seconds.</p>
+  </section>
 
   <section>
     <h2>By model</h2>
@@ -135,6 +165,86 @@ async function toggleDetail(tr, rowId) {
 $("period").addEventListener("change", loadSpend);
 loadSpend();
 setInterval(loadSpend, 5000);
+
+// --- Limits: gauges + editor ---
+const clamp = (n) => Math.max(0, Math.min(100, n));
+let currentRules = { enabled: true, action: "block", downgrade: [], limits: [] };
+
+async function loadLimits() {
+  const box = $("limits");
+  let gs = [];
+  try { const res = await fetch("/api/limits"); if (res.ok) gs = await res.json(); } catch (_) {}
+  if (!gs || !gs.length) { box.className = "muted"; box.textContent = "no limits configured"; return; }
+  box.className = ""; box.innerHTML = "";
+  gs.forEach((g) => {
+    const block = g.block_threshold_usd || g.limit_usd || 0;
+    const frac = block > 0 ? (g.spent_usd / block) * 100 : 0;
+    let color = "var(--accent)";
+    if (block && g.spent_usd >= block) color = "#f87171";
+    else if (g.downgrade_threshold_usd && g.spent_usd >= g.downgrade_threshold_usd) color = "#fbbf24";
+    let ticks = "";
+    if (g.downgrade_threshold_usd && block) ticks += `<span class="tick" style="left:${clamp(g.downgrade_threshold_usd / block * 100)}%"></span>`;
+    const row = document.createElement("div");
+    row.className = "gaugerow";
+    row.innerHTML = `<div class="gaugelabel"><span>${esc(g.scope)} <b>${esc(g.id)}</b> <span class="muted">(${esc(g.period)})</span></span>`
+      + `<span>${usd(g.spent_usd)} / ${usd(block)}</span></div>`
+      + `<div class="gauge"><div class="gauge-fill" style="width:${clamp(frac)}%;background:${color}"></div>${ticks}</div>`;
+    box.appendChild(row);
+  });
+}
+
+function ruleCell(value, key) {
+  return `<input class="cell" data-k="${key}" value="${value == null ? "" : esc(String(value))}">`;
+}
+
+function addRuleRow(l) {
+  l = l || { scope: "team", id: "*", period: "day", limit_usd: 0 };
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${ruleCell(l.scope, "scope")}</td><td>${ruleCell(l.id, "id")}</td>`
+    + `<td>${ruleCell(l.period, "period")}</td><td class="num">${ruleCell(l.limit_usd, "limit_usd")}</td>`
+    + `<td class="num">${ruleCell(l.downgrade_at, "downgrade_at")}</td><td class="num">${ruleCell(l.block_at, "block_at")}</td>`
+    + `<td><span class="del" title="remove">✕</span></td>`;
+  tr.querySelector(".del").addEventListener("click", () => tr.remove());
+  $("rules-body").appendChild(tr);
+}
+
+async function loadRules() {
+  try { const res = await fetch("/api/rules"); if (res.ok) currentRules = await res.json(); } catch (_) {}
+  $("rules-body").innerHTML = "";
+  (currentRules.limits || []).forEach(addRuleRow);
+  loadLimits();
+}
+
+function collectRules() {
+  const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+  const limits = [];
+  $("rules-body").querySelectorAll("tr").forEach((tr) => {
+    const g = {};
+    tr.querySelectorAll("input.cell").forEach((i) => { g[i.dataset.k] = i.value.trim(); });
+    limits.push({
+      scope: g.scope, id: g.id, period: g.period,
+      limit_usd: num(g.limit_usd),
+      downgrade_at: num(g.downgrade_at),
+      block_at: num(g.block_at),
+    });
+  });
+  return { ...currentRules, enabled: true, limits };
+}
+
+async function saveRules() {
+  const msg = $("rules-msg");
+  msg.className = "muted"; msg.textContent = "saving…";
+  try {
+    const res = await fetch("/api/rules", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collectRules()) });
+    if (res.status === 204) { msg.className = "ok"; msg.textContent = "saved ✓"; loadRules(); }
+    else { msg.className = "status-bad"; msg.textContent = await res.text(); }
+  } catch (e) { msg.className = "status-bad"; msg.textContent = String(e); }
+}
+
+$("add-limit").addEventListener("click", () => addRuleRow());
+$("save-rules").addEventListener("click", saveRules);
+loadRules();
+setInterval(loadLimits, 5000);
 
 const es = new EventSource("/api/stream");
 es.onmessage = (ev) => { try { addLive(JSON.parse(ev.data)); } catch (_) {} };
