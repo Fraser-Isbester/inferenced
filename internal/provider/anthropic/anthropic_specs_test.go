@@ -75,14 +75,14 @@ var _ = Describe("ParseRequest", func() {
 	It("extracts model, stream flag, and approximate input tokens", func() {
 		body := []byte(`{"model":"claude-3-5-sonnet","stream":true,` +
 			`"messages":[{"role":"user","content":"12345678"}]}`)
-		info := anthropic.New().ParseRequest(body)
+		info := anthropic.New().ParseRequest(nil, body)
 		Expect(info.Model).To(Equal("claude-3-5-sonnet"))
 		Expect(info.Stream).To(BeTrue())
 		Expect(info.ApproxInputTokens).To(Equal(2)) // 8 / 4
 	})
 
 	It("returns a zero RequestInfo for malformed JSON", func() {
-		info := anthropic.New().ParseRequest([]byte("{broken"))
+		info := anthropic.New().ParseRequest(nil, []byte("{broken"))
 		Expect(info.Model).To(BeEmpty())
 		Expect(info.ApproxInputTokens).To(Equal(0))
 		Expect(info.Stream).To(BeFalse())

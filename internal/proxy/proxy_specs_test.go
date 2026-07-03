@@ -86,7 +86,7 @@ var _ = Describe("Proxy end-to-end", func() {
 		reg.Register(anthropic.New())
 
 		sink := &capturingSink{}
-		rp := proxy.New(reg, sink)
+		rp := proxy.New(reg, sink, proxy.Options{})
 
 		// Override Transport so every upstream dial hits the httptest server,
 		// regardless of the host the Director rewrote (api.anthropic.com).

@@ -86,14 +86,14 @@ var _ = Describe("ParseRequest", func() {
 	It("extracts model, stream flag, and approximate input tokens", func() {
 		body := []byte(`{"model":"gpt-4o-mini","stream":true,` +
 			`"messages":[{"role":"user","content":"12345678"}]}`)
-		info := openai.New().ParseRequest(body)
+		info := openai.New().ParseRequest(nil, body)
 		Expect(info.Model).To(Equal("gpt-4o-mini"))
 		Expect(info.Stream).To(BeTrue())
 		Expect(info.ApproxInputTokens).To(Equal(2)) // 8 / 4
 	})
 
 	It("returns a zero RequestInfo for malformed JSON", func() {
-		info := openai.New().ParseRequest([]byte("{broken"))
+		info := openai.New().ParseRequest(nil, []byte("{broken"))
 		Expect(info.Model).To(BeEmpty())
 		Expect(info.ApproxInputTokens).To(Equal(0))
 		Expect(info.Stream).To(BeFalse())

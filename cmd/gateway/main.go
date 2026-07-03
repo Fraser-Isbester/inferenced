@@ -11,12 +11,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/Fraser-Isbester/inferenced/internal/provider"
-	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
-	"github.com/Fraser-Isbester/inferenced/internal/provider/openai"
+	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/proxy"
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
 )
@@ -26,12 +25,8 @@ import (
 var version = "dev"
 
 func main() {
-	// Default port, overridable by --port flag or the PORT environment variable.
-	defaultPort := "8766"
-	if v := os.Getenv("PORT"); v != "" {
-		defaultPort = v
-	}
-	port := flag.String("port", defaultPort, "TCP port to listen on (127.0.0.1)")
+	configPath := flag.String("config", "", "path to config file (default: search ./inferenced.yaml and $XDG_CONFIG_HOME)")
+	port := flag.String("port", "", "TCP port to listen on (overrides config listen address)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -40,13 +35,27 @@ func main() {
 		return
 	}
 
-	reg := provider.NewRegistry()
-	reg.Register(anthropic.New())
-	reg.Register(openai.New())
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 
-	rp := proxy.New(reg, telemetry.NewStdoutSink())
+	// Resolve the listen address. Precedence: --port flag > PORT env > config.
+	addr := cfg.Listen
+	if v := os.Getenv("PORT"); v != "" {
+		addr = "127.0.0.1:" + v
+	}
+	if *port != "" {
+		addr = "127.0.0.1:" + *port
+	}
 
-	addr := "127.0.0.1:" + *port
+	reg := cfg.Registry()
+	log.Printf("providers enabled: %s", strings.Join(reg.Names(), ", "))
+	rp := proxy.New(reg, telemetry.NewStdoutSink(), proxy.Options{
+		DeveloperID: cfg.Developer.ID,
+		Team:        cfg.Developer.Team,
+	})
+
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: rp,
