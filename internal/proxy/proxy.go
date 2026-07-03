@@ -36,11 +36,18 @@ const (
 // reqCounter is a per-process monotonic counter used to mint request IDs.
 var reqCounter atomic.Uint64
 
+// Options carries per-deployment attribution overrides. A non-empty DeveloperID
+// replaces the anonymized credential hash; Team is attached to every event.
+type Options struct {
+	DeveloperID string
+	Team        string
+}
+
 // New returns a reverse proxy that detects the target provider, forwards the
-// request upstream over HTTPS, and tees the response body so token usage and
-// cost can be metered and emitted to sink. The returned value is an
+// request upstream (scheme per provider), and tees the response body so token
+// usage and cost can be metered and emitted to sink. The returned value is an
 // *httputil.ReverseProxy so tests may override its Transport.
-func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
+func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.ReverseProxy {
 	rp := &httputil.ReverseProxy{}
 
 	// FlushInterval -1 flushes writes to the client immediately, which is
@@ -63,7 +70,7 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 		}
 
 		host := p.UpstreamHost()
-		out.URL.Scheme = "https"
+		out.URL.Scheme = p.UpstreamScheme()
 		out.URL.Host = host
 		// Set both so the upstream sees the correct Host header.
 		out.Host = host
@@ -87,10 +94,13 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 		}
 		out.ContentLength = int64(len(body))
 
-		info := p.ParseRequest(body)
+		info := p.ParseRequest(out, body)
 
 		cred := identity.Credential(out)
-		devID := identity.DeveloperID(cred)
+		devID := opts.DeveloperID
+		if devID == "" {
+			devID = identity.DeveloperID(cred)
+		}
 		reqID := fmt.Sprintf("%d", reqCounter.Add(1))
 		start := time.Now()
 
@@ -99,6 +109,7 @@ func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
 			TimestampUnixMs: start.UnixMilli(),
 			Provider:        p.Name(),
 			DeveloperID:     devID,
+			Team:            opts.Team,
 			OSUser:          identity.OSUser(),
 			Method:          out.Method,
 			Path:            out.URL.Path,

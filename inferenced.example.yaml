@@ -1,0 +1,47 @@
+# Example inferenced configuration.
+#
+# All fields are optional. With no config file present, inferenced listens on
+# 127.0.0.1:8766 with every built-in provider enabled. Point the gateway at a
+# file with `inferenced --config inferenced.yaml`, or drop it at
+# ./inferenced.yaml or $XDG_CONFIG_HOME/inferenced/config.yaml.
+
+listen: "127.0.0.1:8766"
+
+# Identity attribution. `id` overrides the anonymized credential hash (useful
+# when the binary is deployed per-user, e.g. via JAMF); `team` is attached to
+# every telemetry event.
+developer:
+  id: ""      # e.g. "alice@example.com"
+  team: ""    # e.g. "platform"
+
+providers:
+  # Built-ins are enabled by default; set enabled: false to turn one off.
+  anthropic: { enabled: true }
+  openai: { enabled: true }
+  gemini: { enabled: true }
+  ollama:
+    enabled: true
+    upstream: "localhost:11434"   # local Ollama address (plain HTTP)
+
+  # Any endpoint speaking the OpenAI wire format becomes a metered provider with
+  # no code changes. Detected by host (Host-first) or by an OpenAI-style path.
+  openai_compatible:
+    - name: openrouter
+      host: openrouter.ai
+      base_path: /api/v1
+    - name: groq
+      host: api.groq.com
+    - name: together
+      host: api.together.xyz
+    # A local server (vLLM, LM Studio) over plain HTTP, priced at zero:
+    - name: vllm-local
+      host: "localhost:8000"
+      scheme: http
+      pricing:
+        default: { input_per_1m: 0, output_per_1m: 0 }
+    # Per-model pricing overrides (substring match; `default` is the fallback):
+    - name: fireworks
+      host: api.fireworks.ai
+      pricing:
+        default: { input_per_1m: 0.20, output_per_1m: 0.20 }
+        llama-3.1-70b: { input_per_1m: 0.90, output_per_1m: 0.90 }

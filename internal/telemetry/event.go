@@ -17,8 +17,11 @@ type Event struct {
 	TimestampUnixMs int64
 	// Provider is the detected provider name.
 	Provider string
-	// DeveloperID is the anonymized developer identity derived from the credential.
+	// DeveloperID is the developer identity: a configured id when set, otherwise
+	// the anonymized hash derived from the credential.
 	DeveloperID string
+	// Team is the optional team attribution from config.
+	Team string
 	// OSUser is the local operating-system username.
 	OSUser string
 	// Method is the HTTP request method.

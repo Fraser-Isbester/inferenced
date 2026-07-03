@@ -60,11 +60,29 @@ The gateway prints a lifecycle line per request:
 | Provider | Status | Notes |
 | --- | --- | --- |
 | Anthropic | ✅ | Messages API, SSE + non-stream usage |
-| OpenAI (and OpenAI-compatible) | ✅ | Chat Completions, SSE + `usage` |
-| Google Gemini | 🔜 | planned |
-| Ollama (local) | 🔜 | planned |
+| OpenAI | ✅ | Chat Completions, Responses, Embeddings — SSE + `usage` |
+| OpenAI-compatible (config) | ✅ | Azure OpenAI, OpenRouter, Groq, Together, Fireworks, vLLM, LM Studio, … — one config line each |
+| Google Gemini | ✅ | `generateContent`/`streamGenerateContent`, `usageMetadata` |
+| Ollama (local) | ✅ | `/api/chat`, `/api/generate` (NDJSON), `$0` cost |
+| AWS Bedrock, GCP Vertex | 🔜 | need bespoke request signing (SigV4 / OAuth) |
 
-Adding a provider is a single file implementing the `Provider` interface plus one registry entry. Browser-based inference (e.g. chatgpt.com) is out of scope.
+Built-in providers are a single file implementing the `Provider` interface plus a registry entry. Any endpoint that speaks the **OpenAI wire format** needs no code at all — add it under `providers.openai_compatible` in the config (see below). Browser-based inference (e.g. chatgpt.com) is out of scope.
+
+## Configuration
+
+A config file is optional — with none present, inferenced listens on `127.0.0.1:8766` with all built-in providers enabled. Point at one with `--config`, or drop it at `./inferenced.yaml` or `$XDG_CONFIG_HOME/inferenced/config.yaml`. See [`inferenced.example.yaml`](inferenced.example.yaml) for the full schema. Highlights:
+
+```yaml
+developer:
+  id: "alice@example.com"   # overrides the anonymized credential hash for attribution
+  team: "platform"
+providers:
+  openai: { enabled: false }         # disable a built-in
+  ollama: { enabled: true, upstream: "localhost:11434" }
+  openai_compatible:                 # capture any OpenAI-wire endpoint, no code
+    - { name: openrouter, host: openrouter.ai, base_path: /api/v1 }
+    - { name: vllm-local, host: "localhost:8000", scheme: http }
+```
 
 ## Development
 

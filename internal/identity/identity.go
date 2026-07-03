@@ -10,15 +10,28 @@ import (
 	"strings"
 )
 
-// Credential returns the API credential carried by the request. It prefers the
-// "x-api-key" header, then falls back to the Authorization header with any
-// leading "Bearer " prefix stripped, and returns "" when neither is present.
+// Credential returns the API credential carried by the request, checking the
+// auth locations used across providers in priority order: "x-api-key"
+// (Anthropic), "Authorization: Bearer" (OpenAI and compatibles), "api-key"
+// (Azure OpenAI), "x-goog-api-key" (Gemini), then the "key" query parameter
+// (Gemini). It returns "" when none is present (e.g. a local Ollama call).
 func Credential(r *http.Request) string {
 	if v := r.Header.Get("x-api-key"); v != "" {
 		return v
 	}
 	if v := r.Header.Get("Authorization"); v != "" {
 		return strings.TrimSpace(strings.TrimPrefix(v, "Bearer "))
+	}
+	if v := r.Header.Get("api-key"); v != "" {
+		return v
+	}
+	if v := r.Header.Get("x-goog-api-key"); v != "" {
+		return v
+	}
+	if r.URL != nil {
+		if v := r.URL.Query().Get("key"); v != "" {
+			return v
+		}
 	}
 	return ""
 }

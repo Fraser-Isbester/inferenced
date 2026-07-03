@@ -38,6 +38,9 @@ func (anthropicProvider) Name() string { return name }
 // UpstreamHost returns the real Anthropic API host.
 func (anthropicProvider) UpstreamHost() string { return upstreamHost }
 
+// UpstreamScheme returns the scheme used to reach Anthropic.
+func (anthropicProvider) UpstreamScheme() string { return "https" }
+
 // Hosts returns the hostnames that identify Anthropic traffic for Host-first
 // detection.
 func (anthropicProvider) Hosts() []string { return []string{upstreamHost} }
@@ -72,8 +75,9 @@ type anthMessage struct {
 }
 
 // ParseRequest extracts request metadata from the raw request body. Malformed
-// JSON yields a zero-value RequestInfo rather than an error.
-func (anthropicProvider) ParseRequest(body []byte) provider.RequestInfo {
+// JSON yields a zero-value RequestInfo rather than an error. Anthropic carries
+// the model in the body, so the request is unused.
+func (anthropicProvider) ParseRequest(_ *http.Request, body []byte) provider.RequestInfo {
 	var req messagesRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return provider.RequestInfo{}

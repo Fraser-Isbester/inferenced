@@ -53,14 +53,19 @@ type Provider interface {
 	Name() string
 	// UpstreamHost returns the real destination host, e.g. "api.anthropic.com".
 	UpstreamHost() string
+	// UpstreamScheme returns the scheme used to reach the upstream, "https" for
+	// hosted APIs or "http" for local endpoints (e.g. Ollama, a local vLLM).
+	UpstreamScheme() string
 	// Hosts returns the hostnames that identify this provider for Host-first
 	// detection.
 	Hosts() []string
 	// Matches reports whether the request looks like this provider's traffic,
 	// using path and header heuristics (used as an env-override mode fallback).
 	Matches(r *http.Request) bool
-	// ParseRequest extracts request metadata from the raw request body.
-	ParseRequest(body []byte) RequestInfo
+	// ParseRequest extracts request metadata from the request. The body is passed
+	// separately (already read and restorable); r is provided because some
+	// providers carry the model in the URL path rather than the body.
+	ParseRequest(r *http.Request, body []byte) RequestInfo
 	// NewStreamParser returns a StreamParser suitable for the given response
 	// Content-Type.
 	NewStreamParser(contentType string) StreamParser
@@ -83,6 +88,15 @@ func NewRegistry() *Registry {
 // fallback priority used by Detect's Matches phase.
 func (r *Registry) Register(p Provider) {
 	r.providers = append(r.providers, p)
+}
+
+// Names returns the registered provider names in registration order.
+func (r *Registry) Names() []string {
+	names := make([]string, len(r.providers))
+	for i, p := range r.providers {
+		names[i] = p.Name()
+	}
+	return names
 }
 
 // Detect resolves the provider for a request. It first tries Host-first
