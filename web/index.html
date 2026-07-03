@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>inferenced — see every token, model & dollar</title>
-<meta name="description" content="A provider-agnostic local gateway that transparently meters your team's AI inference — tokens, models, and cost — without changing a line of code." />
+<title>inferenced — Developer Endpoint Management for the AI Era</title>
+<meta name="description" content="inferenced is a local endpoint that manages how your developers' AI coding agents talk to their inference providers — observe usage, govern spend, and optimize cost in real time. Provider-agnostic." />
 <style>
   :root{
     --bg:#05060a;
@@ -74,9 +74,10 @@
     color:var(--cyan);margin-bottom:22px;
     opacity:0;animation:rise .8s .1s forwards;
   }
+  @media(max-width:480px){.kicker{font-size:11px;letter-spacing:.16em}}
   h1{
-    font-size:clamp(40px,7.5vw,88px);line-height:1.02;font-weight:800;letter-spacing:-.035em;
-    max-width:16ch;
+    font-size:clamp(34px,6.4vw,76px);line-height:1.05;font-weight:800;letter-spacing:-.03em;
+    max-width:34ch;
   }
   h1 .grad{
     background:linear-gradient(100deg,var(--cyan),var(--violet) 55%,var(--pink));
@@ -99,6 +100,12 @@
   }
   .btn.primary:hover{transform:translateY(-2px);box-shadow:0 16px 50px -12px var(--violet)}
   .btn.ghost:hover{border-color:var(--cyan);color:var(--cyan)}
+
+  /* hero triad kicker */
+  .triad{display:flex;align-items:center;gap:12px;margin-top:30px;font-family:var(--mono);font-size:14px}
+  .tpill{color:var(--_c);font-weight:700;letter-spacing:.02em;transition:.2s;text-shadow:0 0 18px transparent}
+  .tpill:hover{text-shadow:0 0 18px var(--_c)}
+  .tsep{color:var(--dim)}
 
   @keyframes rise{to{opacity:1;transform:none}}
 
@@ -143,44 +150,97 @@
   @media(max-width:900px){.pipe{grid-template-columns:1fr 1fr}.pipe .arrow{display:none}}
   .node{
     position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 18px;
+    display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;
     transition:.35s;overflow:hidden;
   }
   .node::before{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent,var(--_c,var(--cyan)));opacity:0;transition:.35s}
   .node:hover{transform:translateY(-6px);border-color:var(--_c,var(--cyan));box-shadow:0 20px 50px -24px var(--_c,var(--cyan))}
   .node:hover::before{opacity:.08}
-  .node .idx{font-family:var(--mono);font-size:12px;color:var(--dim)}
-  .node .ico{font-size:24px;margin:12px 0 10px;filter:drop-shadow(0 0 10px var(--_c,var(--cyan)))}
-  .node h4{font-size:16px;font-weight:700;letter-spacing:-.01em}
-  .node p{color:var(--muted);font-size:13.5px;margin-top:8px;line-height:1.5}
+  .node .ico{
+    font-size:22px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;
+    border-radius:14px;
+    background:linear-gradient(160deg,color-mix(in srgb, var(--_c,var(--cyan)) 22%, transparent),transparent);
+    border:1px solid var(--_c,var(--cyan));box-shadow:0 0 24px -10px var(--_c,var(--cyan)),inset 0 0 16px -10px var(--_c,var(--cyan));
+  }
+  .node h4{font-size:15px;font-weight:700;letter-spacing:-.01em}
+
+  /* pillars */
+  .pillar{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;margin-top:88px}
+  .pillar:first-of-type{margin-top:48px}
+  @media(max-width:880px){
+    .pillar{grid-template-columns:1fr;gap:30px;margin-top:56px}
+    .pillar .ptext{order:1}
+    .pillar .demo{order:2}
+  }
+  .pbadge{
+    width:60px;height:60px;border-radius:16px;display:flex;align-items:center;justify-content:center;
+    font-size:28px;margin-bottom:20px;
+    background:linear-gradient(160deg,color-mix(in srgb, var(--_c) 22%, transparent),transparent);
+    border:1px solid var(--_c);box-shadow:0 0 30px -8px var(--_c),inset 0 0 20px -12px var(--_c);
+  }
+  .pnum{font-family:var(--mono);font-size:13px;letter-spacing:.16em;color:var(--_c);margin-bottom:14px;font-weight:700}
+  .ptext h3{font-size:clamp(22px,3vw,30px);font-weight:800;letter-spacing:-.02em;max-width:20ch}
+  .ptext p{color:var(--muted);margin-top:14px;font-size:15.5px;max-width:50ch;line-height:1.6}
+  .ptext .tags{margin-top:20px}
+
+  .demo{
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px;
+    box-shadow:0 30px 80px -46px rgba(0,0,0,.9);position:relative;overflow:hidden;min-height:270px;
+  }
+  .demo::after{content:"";position:absolute;inset:0;background:radial-gradient(420px 220px at 100% 0%,color-mix(in srgb, var(--_c) 16%, transparent),transparent 70%);pointer-events:none}
+
+  /* observe demo: convergence lines */
+  .conv{display:flex;flex-direction:column;gap:11px;position:relative;padding-right:92px}
+  .cnode{position:relative;display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .cnode::before{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent 92%);margin-left:8px}
+  .cdot{position:absolute;left:0;top:50%;width:7px;height:7px;border-radius:50%;background:var(--_c);box-shadow:0 0 10px var(--_c);transform:translateY(-50%);opacity:0;animation:travel 2.8s linear infinite;animation-delay:var(--d,0s)}
+  @keyframes travel{0%{left:0;opacity:0}8%{opacity:1}88%{opacity:1}100%{left:calc(100% - 86px);opacity:0}}
+  .chub{position:absolute;right:0;top:0;bottom:0;width:82px;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:11px;font-weight:700;color:var(--_c);letter-spacing:.08em;
+    border-left:1px dashed var(--line);writing-mode:vertical-rl;text-orientation:mixed}
+
+  /* govern demo: budget meters */
+  .meter-row{margin-bottom:20px}
+  .meter-row:last-child{margin-bottom:0}
+  .meter-label{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px 10px;font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-bottom:8px}
+  .meter-label b{color:var(--ink)}
+  .meter{height:10px;border-radius:6px;background:rgba(120,140,200,.08);overflow:hidden;border:1px solid var(--line)}
+  .meter-fill{height:100%;width:0;border-radius:6px;background:var(--c,var(--lime));box-shadow:0 0 14px var(--c,var(--lime));transition:width 1.1s cubic-bezier(.2,.7,.2,1)}
+  .meter-fill.in{width:var(--w)}
+  .chip-warn{font-family:var(--mono);font-size:10.5px;color:var(--amber);border:1px solid var(--amber);border-radius:20px;padding:2px 8px;margin-left:8px}
+  .chip-stop{font-family:var(--mono);font-size:10.5px;color:var(--pink);border:1px solid var(--pink);border-radius:20px;padding:2px 8px;margin-left:8px;animation:pulse 1.6s infinite}
+
+  /* optimize demo: rule-based routing */
+  .rule{font-family:var(--mono);font-size:12.5px;line-height:1.8;color:var(--muted);padding-bottom:16px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+  .rule .rk{color:var(--pink);font-weight:700}
+  .rule .rv{color:var(--ink)}
+  .rlog{min-height:118px;font-family:var(--mono);font-size:12.5px}
+  .rline{margin:6px 0;opacity:0;transform:translateX(-6px);animation:lnin .4s forwards;display:flex;align-items:center;gap:8px}
+  .rmodel.opus{color:var(--violet)}
+  .rmodel.haiku{color:var(--cyan)}
+  .rdowngrade{color:var(--amber);font-weight:700;font-size:11px;border:1px solid var(--amber);border-radius:20px;padding:1px 8px}
+  .rsaved{margin-top:14px;padding-top:14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:13px;color:var(--muted)}
 
   /* features */
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:48px}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-top:48px}
   @media(max-width:880px){.grid{grid-template-columns:1fr}}
   .card{
     background:linear-gradient(180deg,var(--panel),rgba(8,10,18,.6));
     border:1px solid var(--line);border-radius:16px;padding:30px 26px;transition:.3s;position:relative;overflow:hidden;
   }
   .card:hover{transform:translateY(-4px);border-color:rgba(120,140,200,.3)}
-  .card .em{font-size:22px;width:48px;height:48px;display:grid;place-items:center;border-radius:12px;background:rgba(120,140,200,.08);border:1px solid var(--line);margin-bottom:18px}
+  .card .em{
+    font-size:22px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;
+    border-radius:14px;margin-bottom:18px;
+    background:linear-gradient(160deg,color-mix(in srgb, var(--_c,var(--cyan)) 22%, transparent),transparent);
+    border:1px solid var(--_c,var(--cyan));box-shadow:0 0 24px -10px var(--_c,var(--cyan)),inset 0 0 16px -10px var(--_c,var(--cyan));
+  }
   .card h3{font-size:19px;font-weight:700;letter-spacing:-.02em}
   .card p{color:var(--muted);margin-top:10px;font-size:15px}
   .card .tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
   .tags .chip{font-family:var(--mono);font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:4px 11px}
 
-  /* provider marquee */
-  .marq{margin-top:44px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:26px 0;overflow:hidden;position:relative}
-  .marq::before,.marq::after{content:"";position:absolute;top:0;bottom:0;width:120px;z-index:2}
-  .marq::before{left:0;background:linear-gradient(90deg,var(--bg),transparent)}
-  .marq::after{right:0;background:linear-gradient(270deg,var(--bg),transparent)}
-  .track{display:flex;gap:56px;width:max-content;animation:scroll 26s linear infinite;font-family:var(--mono);font-size:18px;color:var(--dim)}
-  .track span{display:flex;align-items:center;gap:12px;white-space:nowrap}
-  .track b{color:var(--ink);font-weight:600}
-  .track .d{width:6px;height:6px;border-radius:50%;background:var(--violet)}
-  @keyframes scroll{to{transform:translateX(-50%)}}
-
   /* code block */
-  .split{display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center;margin-top:20px}
-  @media(max-width:880px){.split{grid-template-columns:1fr}}
   .code{
     font-family:var(--mono);font-size:13.5px;line-height:1.7;white-space:pre-wrap;background:#080b13;border:1px solid var(--line);border-radius:14px;
     padding:22px;overflow:auto;box-shadow:0 30px 80px -40px #000;
@@ -190,15 +250,14 @@
   .code .cmd{color:var(--cyan)}
   .code .ok{color:var(--lime)}
   .code .p{color:var(--violet)}
-  .clist{list-style:none;display:flex;flex-direction:column;gap:18px}
-  .clist li{display:flex;gap:14px;align-items:flex-start}
-  .clist .n{font-family:var(--mono);color:var(--cyan);font-weight:700;flex:0 0 auto}
-  .clist b{display:block;font-size:16px}
-  .clist p{color:var(--muted);font-size:14.5px;margin-top:3px}
+  .code.mini{align-self:flex-start;width:fit-content;margin-top:28px;padding:16px 22px;font-size:13px}
+  @media(max-width:600px){.code.mini{width:100%}}
 
   /* reveal */
   .reveal{opacity:0;transform:translateY(30px);transition:opacity .8s cubic-bezier(.2,.7,.2,1),transform .8s cubic-bezier(.2,.7,.2,1)}
   .reveal.in{opacity:1;transform:none}
+
+  .reduced-motion *{animation-duration:.001s !important;animation-iteration-count:1 !important;transition-duration:.001s !important}
 
   /* footer */
   footer{border-top:1px solid var(--line);padding:56px 0 70px;position:relative;z-index:2}
@@ -216,34 +275,50 @@
 <div class="veil"></div>
 
 <nav id="nav">
-  <div class="brand"><span class="dot"></span><b>inferenced</b><span>/ gateway</span></div>
+  <div class="brand"><span class="dot"></span><b>inferenced</b><span>/ endpoint mgmt</span></div>
   <div class="navlinks">
-    <a href="#how">Pipeline</a>
-    <a href="#features">Platform</a>
-    <a href="#providers">Providers</a>
+    <a href="#observe">Observe</a>
+    <a href="#govern">Govern</a>
+    <a href="#optimize">Optimize</a>
+    <a href="#how">How it works</a>
     <a href="#start">Quickstart</a>
   </div>
 </nav>
 
 <div class="wrap">
   <header>
-    <div class="kicker">Developer&nbsp;AI&nbsp;·&nbsp;Observability&nbsp;·&nbsp;Cost&nbsp;Control</div>
+    <div class="kicker">The&nbsp;local&nbsp;endpoint&nbsp;for&nbsp;AI&nbsp;dev&nbsp;agents</div>
     <h1>
-      <span class="word" style="animation-delay:.30s">See</span>
-      <span class="word" style="animation-delay:.40s">every</span>
-      <span class="word grad" style="animation-delay:.50s">token,</span><br>
-      <span class="word grad" style="animation-delay:.60s">model</span>
-      <span class="word" style="animation-delay:.68s">&amp;</span>
-      <span class="word grad" style="animation-delay:.76s">dollar.</span>
+      <span class="word" style="animation-delay:.30s">Developer</span>
+      <span class="word grad" style="animation-delay:.40s">Endpoint</span>
+      <span class="word grad" style="animation-delay:.50s">Management</span><br>
+      <span class="word" style="animation-delay:.62s">for</span>
+      <span class="word" style="animation-delay:.70s">the</span>
+      <span class="word grad" style="animation-delay:.78s">AI</span>
+      <span class="word grad" style="animation-delay:.86s">Era.</span>
     </h1>
     <p class="sub">
-      <b>inferenced</b> is a provider-agnostic local gateway that transparently intercepts your team's
-      LLM traffic — <b>teeing</b> every streamed response to meter tokens and cost in real time.
-      No latency. No buffering. <b>Not a single line of app code changed.</b>
+      <b>inferenced</b> is a local endpoint that manages how your developers' AI coding agents —
+      Claude Code, Cursor, Copilot, Aider — talk to their inference providers. It <b>tees</b> every
+      streamed response to observe, govern, and optimize inference in real time. No latency.
+      No buffering. <b>Point your agents at it once — nothing else changes.</b>
     </p>
+    <div class="triad" style="opacity:0;animation:rise .8s 1.0s forwards">
+      <a href="#observe" class="tpill" style="--_c:var(--cyan)">Observe</a>
+      <span class="tsep">·</span>
+      <a href="#govern" class="tpill" style="--_c:var(--violet)">Govern</a>
+      <span class="tsep">·</span>
+      <a href="#optimize" class="tpill" style="--_c:var(--pink)">Optimize</a>
+    </div>
     <div class="cta">
       <a href="#start" class="btn primary">Run the gateway →</a>
       <a href="#how" class="btn ghost">How it works</a>
+    </div>
+
+    <div id="start" class="code mini" style="opacity:0;animation:rise .8s 1.2s forwards">
+<span class="cm"># two commands, that's the whole install</span>
+<span class="cmd">brew install</span> <span class="p">fraser-isbester/tap/inferenced</span>
+<span class="cmd">inferenced</span> install
     </div>
 
     <!-- live telemetry terminal -->
@@ -258,12 +333,97 @@
   </header>
 </div>
 
+<!-- three pillars -->
+<section id="pillars">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="eyebrow">One endpoint, three jobs</div>
+      <h2>See it. Cap it. Steer it.</h2>
+      <p class="lead">inferenced sits between every coding agent and its inference provider — see what agents do, cap what each developer and team can spend, and steer traffic to cheaper models automatically.</p>
+    </div>
+
+    <!-- 01 Observe -->
+    <div class="pillar reveal" id="observe">
+      <div class="ptext">
+        <div class="pbadge" style="--_c:var(--cyan)">👁️</div>
+        <div class="pnum" style="--_c:var(--cyan)">01 · OBSERVE</div>
+        <h3>Unified usage &amp; productivity metrics.</h3>
+        <p>Every agent's traffic, across every inference provider, rolled into one view of usage, productivity, and cost — per developer and per team.</p>
+        <div class="tags"><span class="chip">Usage reports</span><span class="chip">Productivity metrics</span><span class="chip">Audit trail</span></div>
+      </div>
+      <div class="demo" id="demo-observe" style="--_c:var(--cyan)">
+        <div class="conv">
+          <div class="cnode"><span class="cdot" style="--d:0s"></span>Claude Code</div>
+          <div class="cnode"><span class="cdot" style="--d:.6s"></span>Cursor</div>
+          <div class="cnode"><span class="cdot" style="--d:1.2s"></span>Copilot</div>
+          <div class="cnode"><span class="cdot" style="--d:1.8s"></span>Aider</div>
+          <div class="chub">inferenced</div>
+        </div>
+        <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--line)">
+          <div class="ln"><span class="prov">Claude Code</span> <span class="k">·</span> <span class="v">1,204 req</span> <span class="k">·</span> <span class="v">18.2M tok</span> <span class="k">·</span> <span class="cost">$42.10</span></div>
+          <div class="ln" style="animation-delay:.12s"><span class="prov">Cursor</span> <span class="k">·</span> <span class="v">640 req</span> <span class="k">·</span> <span class="v">9.8M tok</span> <span class="k">·</span> <span class="cost">$11.30</span></div>
+          <div class="ln" style="animation-delay:.24s"><span class="prov">Copilot</span> <span class="k">·</span> <span class="v">388 req</span> <span class="k">·</span> <span class="v">5.1M tok</span> <span class="k">·</span> <span class="cost">$6.85</span></div>
+          <div class="ln" style="animation-delay:.36s"><span class="prov">Aider</span> <span class="k">·</span> <span class="v">212 req</span> <span class="k">·</span> <span class="v">2.9M tok</span> <span class="k">·</span> <span class="cost">$3.40</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 02 Govern -->
+    <div class="pillar reveal" id="govern">
+      <div class="demo" id="demo-govern" style="--_c:var(--violet)">
+        <div class="meter-row">
+          <div class="meter-label"><span><b>alice</b> · Claude Code</span><span>$42 / $50 <span class="chip-warn">84% · alerting</span></span></div>
+          <div class="meter"><div class="meter-fill" style="--w:84%;--c:var(--amber)"></div></div>
+        </div>
+        <div class="meter-row">
+          <div class="meter-label"><span><b>bob</b> · Cursor</span><span>$9 / $50</span></div>
+          <div class="meter"><div class="meter-fill" style="--w:18%;--c:var(--lime)"></div></div>
+        </div>
+        <div class="meter-row">
+          <div class="meter-label"><span><b>team platform</b> · agents</span><span>$1,720 / $2,000 <span class="chip-warn">Opus→Haiku active</span></span></div>
+          <div class="meter"><div class="meter-fill" style="--w:86%;--c:var(--amber)"></div></div>
+        </div>
+        <div class="meter-row">
+          <div class="meter-label"><span><b>team ml</b> · agents</span><span>$2,000 / $2,000 <span class="chip-stop">ENFORCED</span></span></div>
+          <div class="meter"><div class="meter-fill" style="--w:100%;--c:var(--pink)"></div></div>
+        </div>
+      </div>
+      <div class="ptext">
+        <div class="pbadge" style="--_c:var(--violet)">🛡️</div>
+        <div class="pnum" style="--_c:var(--violet)">02 · GOVERN</div>
+        <h3>Set the ceiling. Enforce it automatically.</h3>
+        <p>Cap spend per developer or per team, monthly or on a rolling basis. inferenced warns as an agent's usage approaches the limit, and blocks or downgrades requests the moment it's crossed — no manual policing required.</p>
+        <div class="tags"><span class="chip">Per-dev limits</span><span class="chip">Per-team limits</span><span class="chip">Rolling or monthly</span></div>
+      </div>
+    </div>
+
+    <!-- 03 Optimize -->
+    <div class="pillar reveal" id="optimize">
+      <div class="ptext">
+        <div class="pbadge" style="--_c:var(--pink)">🎯</div>
+        <div class="pnum" style="--_c:var(--pink)">03 · OPTIMIZE</div>
+        <h3>Write the rule once. inferenced steers the traffic.</h3>
+        <p>"Once Team Platform's coding agents pass $1,500 on Opus this month, route new requests to Haiku." inferenced rewrites the model at the proxy, mid-flight — the agent never notices, the bill does.</p>
+        <div class="tags"><span class="chip">Rule-based routing</span><span class="chip">Automatic downgrade</span><span class="chip">Agent never notices</span></div>
+      </div>
+      <div class="demo" id="demo-optimize" style="--_c:var(--pink)">
+        <div class="rule">
+          <span class="rk">RULE</span>  IF <span class="rv">spend(opus, team platform, 30d)</span> &gt; <span class="rv" style="color:var(--lime)">$1,500</span><br>
+          <span class="rk">THEN</span> ROUTE → <span class="rv">claude-haiku-4-5</span>
+        </div>
+        <div class="rlog" id="rlog"></div>
+        <div class="rsaved">Saved so far this session: <span id="rsaved-val" style="color:var(--lime);font-weight:700">$0.00</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- stats -->
 <section id="stats">
   <div class="wrap reveal">
     <div class="stats">
       <div class="stat"><div class="num c1" data-to="100" data-suf="%">0%</div><div class="lbl">of traffic metered</div></div>
-      <div class="stat"><div class="num c2" data-to="0" data-suf="ms" data-pre="+">+0ms</div><div class="lbl">added latency (tee)</div></div>
+      <div class="stat"><div class="num c2" data-to="0" data-suf="ms" data-pre="~">~0ms</div><div class="lbl">added latency (tee)</div></div>
       <div class="stat"><div class="num c3" data-to="1" data-suf=" binary">0</div><div class="lbl">to deploy · stdlib Go</div></div>
       <div class="stat"><div class="num c4" data-to="0" data-suf="" data-pre="">0</div><div class="lbl">code changes required</div></div>
     </div>
@@ -275,124 +435,52 @@
   <div class="wrap">
     <div class="reveal">
       <div class="eyebrow">The intercept path</div>
-      <h2>One request in. Full observability out.</h2>
-      <p class="lead">Every inference call flows through five stages — the client never waits on any of them.</p>
+      <h2>What happens on every request.</h2>
+      <p class="lead">Every inference call flows through five stages — the agent never waits on any of them.</p>
     </div>
     <div class="pipe reveal">
-      <div class="node" style="--_c:var(--cyan)">
-        <div class="idx">01</div><div class="ico">🛰️</div>
-        <h4>Intercept</h4><p>A local reverse proxy catches outbound LLM traffic — no per-user config.</p>
-      </div>
-      <div class="node" style="--_c:var(--violet)">
-        <div class="idx">02</div><div class="ico">🧭</div>
-        <h4>Detect</h4><p>Host-first, then heuristic matching resolves the <em>Provider</em> — Anthropic, OpenAI, more.</p>
-      </div>
-      <div class="node" style="--_c:var(--amber)">
-        <div class="idx">03</div><div class="ico">🔱</div>
-        <h4>Tee</h4><p><code>TeeReader</code> + <code>io.Pipe</code> forks the stream: hot path to client, copy to the meter.</p>
-      </div>
-      <div class="node" style="--_c:var(--lime)">
-        <div class="idx">04</div><div class="ico">📊</div>
-        <h4>Meter</h4><p>An incremental stream parser counts tokens and prices them to USD as they fly by.</p>
-      </div>
-      <div class="node" style="--_c:var(--pink)">
-        <div class="idx">05</div><div class="ico">📡</div>
-        <h4>Emit</h4><p>A structured <em>Event</em> lands in a <em>Sink</em> — stdout today, control plane tomorrow.</p>
-      </div>
+      <div class="node" style="--_c:var(--cyan)"><div class="ico">🛰️</div><h4>Intercept</h4></div>
+      <div class="node" style="--_c:var(--violet)"><div class="ico">🧭</div><h4>Detect</h4></div>
+      <div class="node" style="--_c:var(--amber)"><div class="ico">🔱</div><h4>Tee</h4></div>
+      <div class="node" style="--_c:var(--lime)"><div class="ico">📊</div><h4>Meter</h4></div>
+      <div class="node" style="--_c:var(--pink)"><div class="ico">📡</div><h4>Emit</h4></div>
     </div>
   </div>
 </section>
 
-<!-- features -->
+<!-- under the hood -->
 <section id="features">
   <div class="wrap">
     <div class="reveal">
-      <div class="eyebrow">The platform</div>
-      <h2>Built for a fleet of developer laptops.</h2>
-      <p class="lead">A single Go binary today — the seams for a full cost-management control plane are already in place.</p>
+      <div class="eyebrow">Under the hood</div>
+      <h2>A single self-hosted Go binary.</h2>
+      <p class="lead">Here's the machinery underneath.</p>
     </div>
     <div class="grid">
-      <div class="card reveal">
+      <div class="card reveal" style="--_c:var(--cyan)">
         <div class="em">🧩</div>
         <h3>Provider-agnostic by design</h3>
         <p>Vendor logic lives behind one <code>Provider</code> interface. Adding Gemini or Ollama is <em>add-a-file</em>, not a rewrite.</p>
-        <div class="tags"><span class="chip">Anthropic</span><span class="chip">OpenAI</span><span class="chip">Azure</span><span class="chip">+ more</span></div>
+        <div class="tags"><span class="chip">Anthropic</span><span class="chip">OpenAI</span><span class="chip">Azure</span><span class="chip">Gemini</span><span class="chip">Ollama</span><span class="chip">+ more</span></div>
       </div>
-      <div class="card reveal">
+      <div class="card reveal" style="--_c:var(--amber)">
         <div class="em">⚡</div>
         <h3>Zero-latency teeing</h3>
-        <p>Responses stream through untouched with <code>FlushInterval=-1</code>. Metering happens on a parallel copy — the client feels nothing.</p>
+        <p>Responses stream through untouched with <code>FlushInterval=-1</code>. Metering happens on a parallel copy — the agent feels nothing.</p>
         <div class="tags"><span class="chip">no buffering</span><span class="chip">real-time SSE</span></div>
       </div>
-      <div class="card reveal">
+      <div class="card reveal" style="--_c:var(--violet)">
         <div class="em">🔐</div>
         <h3>Identity without secrets</h3>
         <p>Each developer gets a stable <code>sha256(cred)[:12]</code> id for per-person &amp; per-team attribution. The raw credential is never stored.</p>
         <div class="tags"><span class="chip">redacted auth</span><span class="chip">privacy-first</span></div>
       </div>
-      <div class="card reveal">
-        <div class="em">💸</div>
-        <h3>Tokens → cost, live</h3>
-        <p>Every request is priced to USD the moment it completes. Roll it up to spend limits per person and per team.</p>
-        <div class="tags"><span class="chip">$ metering</span><span class="chip">budgets</span></div>
-      </div>
-      <div class="card reveal">
+      <div class="card reveal" style="--_c:var(--lime)">
         <div class="em">🛠️</div>
-        <h3>Transparent deploy</h3>
-        <p>Ship a JAMF-pushed binary with a local DNS map — outbound LLM traffic is forwarded transparently. No <code>BASE_URL</code> juggling.</p>
-        <div class="tags"><span class="chip">JAMF</span><span class="chip">DNS map</span></div>
+        <h3>Simple to run</h3>
+        <p>One binary, one env var. Run it locally, point your agent's base URL at it — that's the whole install. Nothing else to configure, deploy, or maintain.</p>
+        <div class="tags"><span class="chip">Self-hosted</span><span class="chip">One env var</span><span class="chip">No agent changes</span></div>
       </div>
-      <div class="card reveal">
-        <div class="em">📈</div>
-        <h3>Signals that compound</h3>
-        <p>Structured events are ready to correlate with commits &amp; PRs — measure how AI actually moves your team's productivity.</p>
-        <div class="tags"><span class="chip">Event</span><span class="chip">Sink</span><span class="chip">control plane</span></div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- providers marquee -->
-<section id="providers" style="padding-top:20px">
-  <div class="wrap reveal">
-    <div class="eyebrow">One gateway, every backend</div>
-    <h2>Whatever your developers reach for.</h2>
-  </div>
-  <div class="marq reveal">
-    <div class="track" id="track"></div>
-  </div>
-</section>
-
-<!-- quickstart -->
-<section id="start">
-  <div class="wrap">
-    <div class="reveal">
-      <div class="eyebrow">Quickstart</div>
-      <h2>From clone to metered in 30 seconds.</h2>
-    </div>
-    <div class="split reveal">
-      <div class="code">
-<span class="cm"># build & run the gateway (stdlib Go, one binary)</span>
-<span class="cmd">go run</span> ./cmd/gateway <span class="p">--port=8766</span>
-
-<span class="cm"># point any client at it — no code changes</span>
-<span class="env">export</span> ANTHROPIC_BASE_URL=<span class="p">http://127.0.0.1:8766</span>
-
-<span class="cm"># use your tools exactly as before…</span>
-<span class="cmd">claude</span> <span class="cm"># or the OpenAI SDK, curl, anything</span>
-
-<span class="cm"># …and watch the telemetry stream:</span>
-<span class="ok">[RESPONSE]</span> <-- Complete | Status: 200
-   | Provider: <span class="p">anthropic</span> | Model: claude-opus-4
-   | Tokens In: ~1204 | Out: ~318
-   | Approx Cost: <span class="ok">$0.04127</span>
-      </div>
-      <ul class="clist">
-        <li><span class="n">1</span><div><b>Drop it in the path</b><p>The gateway listens on localhost and forwards upstream over HTTPS. Existing tools just work.</p></div></li>
-        <li><span class="n">2</span><div><b>It detects the provider</b><p>Host-first resolution picks the right parser and pricing automatically.</p></div></li>
-        <li><span class="n">3</span><div><b>The stream is tee'd</b><p>Your tokens arrive block-by-block in real time while a copy is metered.</p></div></li>
-        <li><span class="n">4</span><div><b>You get a structured event</b><p>Provider, model, redacted auth, developer id, token counts, and cost — every call.</p></div></li>
-      </ul>
     </div>
   </div>
 </section>
@@ -400,10 +488,10 @@
 <!-- final cta -->
 <section class="cta-final">
   <div class="wrap reveal">
-    <h2 class="grad" style="background:linear-gradient(100deg,var(--cyan),var(--violet),var(--pink));-webkit-background-clip:text;background-clip:text;color:transparent">Stop guessing what AI costs you.</h2>
-    <p class="lead">Meter it at the source — provider-agnostic, transparent, and yours to run.</p>
+    <h2 class="grad" style="background:linear-gradient(100deg,var(--cyan),var(--violet),var(--pink));-webkit-background-clip:text;background-clip:text;color:transparent">Every agent's traffic. Managed.</h2>
+    <p class="lead">Run inferenced locally, today. Transparent, self-hosted, and yours to run.</p>
     <div class="cta">
-      <a href="#start" class="btn primary">Get started →</a>
+      <a href="#start" class="btn primary">Roll it out to your team →</a>
       <a href="https://github.com/Fraser-Isbester/inferenced" class="btn ghost">View on GitHub</a>
     </div>
   </div>
@@ -412,12 +500,16 @@
 <footer>
   <div class="wrap foot">
     <div class="brand"><span class="dot"></span><b>inferenced</b></div>
-    <p>intercept → detect → tee → meter → emit</p>
-    <p>© 2026 · a spike toward AI cost management</p>
+    <p>observe → govern → optimize</p>
+    <p>© 2026 · a local endpoint for AI dev agent traffic</p>
   </div>
 </footer>
 
 <script>
+/* ---------- reduced motion ---------- */
+const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(REDUCED) document.documentElement.classList.add('reduced-motion');
+
 /* ---------- nav scroll state ---------- */
 const nav=document.getElementById('nav');
 addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>20));
@@ -439,11 +531,13 @@ const cio=new IntersectionObserver((es)=>es.forEach(e=>{
 }),{threshold:.4});
 cio.observe(document.getElementById('stats'));
 
-/* ---------- provider marquee ---------- */
-const provs=['Anthropic','OpenAI','Azure OpenAI','Google Gemini','Ollama','Mistral','Groq','Together','local runtimes'];
-const track=document.getElementById('track');
-const build=()=>provs.map(p=>`<span><i class="d"></i><b>${p}</b></span>`).join('');
-track.innerHTML=build()+build();
+/* ---------- pillars: trace fills, meter fills, routing demo trigger ---------- */
+const pio=new IntersectionObserver((es)=>es.forEach(e=>{
+  if(!e.isIntersecting)return; pio.unobserve(e.target);
+  e.target.querySelectorAll('.meter-fill').forEach(el=>el.classList.add('in'));
+  startRoute();
+}),{threshold:.35});
+pio.observe(document.getElementById('pillars'));
 
 /* ---------- live telemetry log ---------- */
 const log=document.getElementById('log');
@@ -479,9 +573,38 @@ function req(){
   setTimeout(()=>push(`<span class="tag t-resp">[RESPONSE]</span> <span class="k"><--</span> 200 <span class="k">·</span> <span class="prov">${mm.p}</span>/<span class="v">${mm.m}</span> <span class="k">· in</span> ~${inTok} <span class="k">out</span> ~${outTok} <span class="k">·</span> <span class="cost">$${cost.toFixed(5)}</span>`),980);
 }
 // seed a couple then loop
-push(`<span class="k"># inferenced gateway listening on 127.0.0.1:8766 — provider-agnostic tee-meter</span>`);
-setTimeout(req,600);
-setInterval(req,2600);
+push(`<span class="k"># inferenced listening on 127.0.0.1:8766 — tee-meter active</span>`);
+if(REDUCED){ req(); } else { setTimeout(req,600); setInterval(req,2600); }
+
+/* ---------- optimize pillar: rule-based routing demo ---------- */
+const rlog=document.getElementById('rlog');
+const rsavedEl=document.getElementById('rsaved-val');
+let rCount=0, saved=0, routeSeed=41, routeTimer=null;
+const rRnd=(a,b)=>{routeSeed=(routeSeed*9301+49297)%233280;return a+(routeSeed/233280)*(b-a)};
+function rPush(html){
+  const d=document.createElement('div');
+  d.className='rline';
+  d.innerHTML=html;
+  rlog.appendChild(d);
+  while(rlog.children.length>5) rlog.removeChild(rlog.firstChild);
+}
+const DOWNGRADE_AFTER=4;
+function routeTick(){
+  rCount++;
+  const downgraded=rCount>DOWNGRADE_AFTER;
+  const model=downgraded?'claude-haiku-4-5':'claude-opus-4';
+  const cls=downgraded?'haiku':'opus';
+  const outTok=Math.floor(rRnd(120,520));
+  if(downgraded) saved+=outTok*(0.000075-0.000005);
+  rPush(`<span class="k">req_${1000+rCount}</span> <span class="k">→</span> <span class="rmodel ${cls}">${model}</span>`+(downgraded?` <span class="rdowngrade">↓ downgraded</span>`:''));
+  rsavedEl.textContent='$'+saved.toFixed(2);
+}
+function startRoute(){
+  if(routeTimer)return;
+  routeTick();
+  if(REDUCED)return;
+  routeTimer=setInterval(routeTick,1500);
+}
 
 /* ---------- canvas token flow ---------- */
 const cv=document.getElementById('flow'),ctx=cv.getContext('2d');
@@ -530,12 +653,7 @@ function draw(){
   ctx.globalAlpha=1;
   requestAnimationFrame(draw);
 }
-draw();
-
-/* respect reduced motion */
-if(matchMedia('(prefers-reduced-motion: reduce)').matches){
-  cv.style.display='none';
-}
+if(REDUCED){ cv.style.display='none'; } else { draw(); }
 </script>
 </body>
 </html>
