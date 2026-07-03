@@ -1,0 +1,222 @@
+// Package proxy implements the provider-agnostic reverse proxy that intercepts
+// LLM inference traffic, forwards it upstream over HTTPS, tees the streamed
+// response to meter token usage without buffering the body, and emits a
+// structured telemetry Event once the response completes.
+package proxy
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httputil"
+	"sync/atomic"
+	"time"
+
+	"github.com/Fraser-Isbester/inferenced/internal/identity"
+	"github.com/Fraser-Isbester/inferenced/internal/logx"
+	"github.com/Fraser-Isbester/inferenced/internal/provider"
+	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
+)
+
+// ctxKey is a private context key type so the Director can stash per-request
+// state for ModifyResponse without colliding with other packages' keys.
+type ctxKey int
+
+const (
+	// eventKey stores the partially populated *telemetry.Event.
+	eventKey ctxKey = iota
+	// providerKey stores the detected provider.Provider.
+	providerKey
+	// startKey stores the request start time.Time.
+	startKey
+)
+
+// reqCounter is a per-process monotonic counter used to mint request IDs.
+var reqCounter atomic.Uint64
+
+// New returns a reverse proxy that detects the target provider, forwards the
+// request upstream over HTTPS, and tees the response body so token usage and
+// cost can be metered and emitted to sink. The returned value is an
+// *httputil.ReverseProxy so tests may override its Transport.
+func New(reg *provider.Registry, sink telemetry.Sink) *httputil.ReverseProxy {
+	rp := &httputil.ReverseProxy{}
+
+	// FlushInterval -1 flushes writes to the client immediately, which is
+	// required for low-latency Server-Sent Events streaming.
+	rp.FlushInterval = -1
+	rp.Transport = &http.Transport{ForceAttemptHTTP2: true}
+
+	rp.Director = func(req *http.Request) {
+		p, ok := reg.Detect(req)
+		if !ok {
+			// Unknown traffic: best-effort passthrough. Point at the request's
+			// own host if we have one so the proxy does not crash on a nil URL.
+			if req.URL != nil && req.URL.Scheme == "" {
+				req.URL.Scheme = "https"
+				if req.URL.Host == "" {
+					req.URL.Host = req.Host
+				}
+			}
+			return
+		}
+
+		host := p.UpstreamHost()
+		req.URL.Scheme = "https"
+		req.URL.Host = host
+		// Set both so the upstream sees the correct Host header.
+		req.Host = host
+
+		// Read and restore the body so ParseRequest can inspect it while the
+		// forwarded request still carries a replayable body.
+		var body []byte
+		if req.Body != nil {
+			b, err := io.ReadAll(req.Body)
+			req.Body.Close()
+			body = b // keep whatever was read, even on a partial read
+			if err != nil {
+				// Surface the read failure rather than silently forwarding a
+				// truncated/empty inference request.
+				fmt.Printf("[WARN]     --> request body read error: %v\n", err)
+			}
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(body)), nil
+		}
+		req.ContentLength = int64(len(body))
+
+		info := p.ParseRequest(body)
+
+		cred := identity.Credential(req)
+		devID := identity.DeveloperID(cred)
+		reqID := fmt.Sprintf("%d", reqCounter.Add(1))
+		start := time.Now()
+
+		ev := &telemetry.Event{
+			RequestID:       reqID,
+			TimestampUnixMs: start.UnixMilli(),
+			Provider:        p.Name(),
+			DeveloperID:     devID,
+			OSUser:          identity.OSUser(),
+			Method:          req.Method,
+			Path:            req.URL.Path,
+			Model:           info.Model,
+			Stream:          info.Stream,
+			InputTokens:     info.ApproxInputTokens,
+		}
+
+		logx.Request(reqID, req.Method, req.URL.Path, p.Name(), info.Model, devID, logx.Redact(cred))
+
+		ctx := req.Context()
+		ctx = context.WithValue(ctx, eventKey, ev)
+		ctx = context.WithValue(ctx, providerKey, p)
+		ctx = context.WithValue(ctx, startKey, start)
+		*req = *req.WithContext(ctx)
+	}
+
+	rp.ModifyResponse = func(resp *http.Response) error {
+		ev, ok := resp.Request.Context().Value(eventKey).(*telemetry.Event)
+		if !ok || ev == nil {
+			return nil
+		}
+		p, ok := resp.Request.Context().Value(providerKey).(provider.Provider)
+		if !ok || p == nil {
+			return nil
+		}
+		start, _ := resp.Request.Context().Value(startKey).(time.Time)
+
+		ev.Status = resp.StatusCode
+		logx.StreamStart(ev.RequestID)
+
+		parser := p.NewStreamParser(resp.Header.Get("Content-Type"))
+
+		// io.Pipe is unbuffered: the observer goroutine below must continuously
+		// drain pr or writes to pw (driven by the client read path via TeeReader)
+		// will block, stalling the client. Keep parser.Write cheap.
+		pr, pw := io.Pipe()
+		model := ev.Model
+
+		go func() {
+			// Drain the tee'd bytes into the parser. io.Copy returns when the
+			// writer closes pw (normal EOF) or the pipe is broken.
+			io.Copy(parser, pr)
+
+			u := parser.Finish()
+			// Prefer the parser's authoritative input count; otherwise keep the
+			// Director's request-body estimate (already on ev.InputTokens). This
+			// matters for e.g. OpenAI streams sent without stream_options.include_usage,
+			// where the parser reports InputTokens=0 but a usable estimate exists.
+			if u.InputTokens > 0 {
+				ev.InputTokens = u.InputTokens
+			} else {
+				ev.TokensApproximated = true
+			}
+			ev.OutputTokens = u.OutputTokens
+			if u.Approximated {
+				ev.TokensApproximated = true
+			}
+			ev.CostUSD = p.Price(model, ev.InputTokens, ev.OutputTokens)
+			ev.DurationMs = time.Since(start).Milliseconds()
+			sink.Emit(*ev)
+
+			// Release any pending writer; further reads see EOF.
+			pr.Close()
+		}()
+
+		resp.Body = &teeBody{
+			r:      io.TeeReader(resp.Body, pw),
+			upBody: resp.Body,
+			pw:     pw,
+		}
+		return nil
+	}
+
+	rp.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
+		fmt.Printf("[ERROR]    <-- upstream error: %v\n", err)
+		// Upstream transport failures never reach ModifyResponse, so meter the
+		// failed request here instead of losing it. Only one of ErrorHandler or
+		// ModifyResponse runs per request, so this stays exactly-once.
+		if ev, ok := req.Context().Value(eventKey).(*telemetry.Event); ok && ev != nil {
+			ev.Status = http.StatusBadGateway
+			if start, ok := req.Context().Value(startKey).(time.Time); ok {
+				ev.DurationMs = time.Since(start).Milliseconds()
+			}
+			if p, ok := req.Context().Value(providerKey).(provider.Provider); ok && p != nil {
+				ev.CostUSD = p.Price(ev.Model, ev.InputTokens, ev.OutputTokens)
+			}
+			ev.TokensApproximated = true
+			sink.Emit(*ev)
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}
+
+	return rp
+}
+
+// teeBody wraps the upstream response body. Reads pass through an io.TeeReader
+// so every byte delivered to the client is also mirrored to the observer pipe.
+// Close closes BOTH the upstream body and the pipe writer, which is essential:
+// closing pw unblocks the observer goroutine and lets it see EOF, so an early
+// client disconnect (ReverseProxy closes resp.Body) cannot leak the goroutine
+// or hang.
+type teeBody struct {
+	r      io.Reader
+	upBody io.ReadCloser
+	pw     *io.PipeWriter
+}
+
+// Read reads from the tee'd stream, mirroring bytes to the observer pipe.
+func (t *teeBody) Read(p []byte) (int, error) {
+	return t.r.Read(p)
+}
+
+// Close closes both the upstream body and the pipe writer so the observer
+// goroutine unblocks and emits exactly once.
+func (t *teeBody) Close() error {
+	err := t.upBody.Close()
+	// Closing the writer signals EOF to the observer's io.Copy(parser, pr).
+	t.pw.Close()
+	return err
+}
