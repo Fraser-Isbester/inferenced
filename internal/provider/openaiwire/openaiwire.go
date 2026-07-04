@@ -88,41 +88,22 @@ func ParseRequest(r *http.Request, body []byte) provider.RequestInfo {
 }
 
 // extractMetadata builds the bounded metadata blob from an OpenAI-wire request:
-// advertised tools, tool-call counts, and files/commands mined from each tool
-// call's JSON-string arguments. Returns nil when nothing is captured.
+// the tool-catalog size, tool-call counts, and files/commands (and the activity
+// they represent) mined from each tool call's JSON-string arguments. Returns nil
+// when nothing is captured. OpenAI has no tool-error flag on the wire, so
+// tool_failures is not populated here.
 func extractMetadata(req request) map[string]any {
 	b := reqmeta.New()
 	b.SetMessageCount(len(req.Messages))
-	for _, t := range req.Tools {
-		b.AddTool(t.Function.Name)
-	}
+	b.SetToolsAvailable(len(req.Tools))
 	for _, m := range req.Messages {
 		for _, tc := range m.ToolCalls {
-			b.AddToolCall(tc.Function.Name)
-			addArgSignals(b, tc.Function.Arguments)
+			var input map[string]any
+			_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
+			b.AddToolUse(tc.Function.Name, input)
 		}
 	}
 	return b.Map()
-}
-
-// addArgSignals pulls file paths and shell commands from a tool call's arguments
-// (a JSON-encoded string), tolerating any schema.
-func addArgSignals(b *reqmeta.Builder, args string) {
-	if args == "" {
-		return
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(args), &obj); err != nil {
-		return
-	}
-	for _, k := range []string{"file_path", "path", "notebook_path"} {
-		if s, ok := obj[k].(string); ok {
-			b.AddFile(s)
-		}
-	}
-	if s, ok := obj["command"].(string); ok {
-		b.AddCommand(s)
-	}
 }
 
 // contentTextLen returns the number of text characters in a content field,

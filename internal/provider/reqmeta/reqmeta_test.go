@@ -19,40 +19,72 @@ var _ = Describe("Builder", func() {
 		Expect(reqmeta.New().Map()).To(BeNil())
 	})
 
-	It("dedupes files and commands and counts tool calls", func() {
+	It("routes tool uses to read/edit/create by classified operation", func() {
 		b := reqmeta.New()
-		b.AddFile("a.go")
-		b.AddFile("a.go")
-		b.AddFile("b.go")
-		b.AddCommand("git status")
-		b.AddToolCall("Read")
-		b.AddToolCall("Read")
-		b.SetMessageCount(4)
+		b.AddToolUse("Read", map[string]any{"file_path": "a.go"})
+		b.AddToolUse("Edit", map[string]any{"file_path": "b.go"})
+		b.AddToolUse("Edit", map[string]any{"file_path": "b.go"}) // dedup file, second edit still counts
+		b.AddToolUse("Write", map[string]any{"file_path": "c.go"})
+		b.AddToolUse("Bash", map[string]any{"command": "ls"})
 
 		m := b.Map()
-		Expect(m["files"]).To(ConsistOf("a.go", "b.go"))
-		Expect(m["commands"]).To(ConsistOf("git status"))
-		Expect(m["tool_call_counts"]).To(HaveKeyWithValue("Read", 2))
-		Expect(m["message_count"]).To(Equal(4))
+		Expect(m["files_read"]).To(ConsistOf("a.go"))
+		Expect(m["files_edited"]).To(ConsistOf("b.go"))
+		Expect(m["files_created"]).To(ConsistOf("c.go"))
+		Expect(m["edits"]).To(Equal(2))
+		Expect(m["commands"]).To(ConsistOf("ls"))
+		Expect(m["tool_call_counts"]).To(HaveKeyWithValue("Edit", 2))
 	})
 
-	It("caps unbounded lists", func() {
+	It("classifies commands into activity counters", func() {
+		b := reqmeta.New()
+		b.AddCommand("git commit -m wip")
+		b.AddCommand("git push origin main")
+		b.AddCommand("gh pr create --fill")
+		b.AddCommand("go test ./...")
+		b.AddCommand("go build -o bin/x ./cmd/x")
+		b.AddCommand("git show --stat && echo done") // no commit/build/test
+
+		m := b.Map()
+		Expect(m["git_commits"]).To(Equal(1))
+		Expect(m["git_pushes"]).To(Equal(1))
+		Expect(m["prs_opened"]).To(Equal(1))
+		Expect(m["tests_run"]).To(Equal(1))
+		Expect(m["builds"]).To(Equal(1))
+	})
+
+	It("counts tool failures from error results", func() {
+		b := reqmeta.New()
+		b.AddToolResult(false)
+		b.AddToolResult(true)
+		b.AddToolResult(true)
+		Expect(b.Map()).To(HaveKeyWithValue("tool_failures", 2))
+	})
+
+	It("records the tool-catalog size, not the catalog", func() {
+		b := reqmeta.New()
+		b.SetToolsAvailable(250)
+		m := b.Map()
+		Expect(m).To(HaveKeyWithValue("tools_available", 250))
+		Expect(m).NotTo(HaveKey("tools"))
+	})
+
+	It("ignores unknown tools with no command (no file-list pollution)", func() {
+		b := reqmeta.New()
+		b.AddToolUse("WebSearch", map[string]any{"query": "otters"})
+		m := b.Map()
+		Expect(m).NotTo(HaveKey("files_read"))
+		Expect(m).To(HaveKeyWithValue("tool_call_counts", HaveKeyWithValue("WebSearch", 1)))
+	})
+
+	It("caps unbounded file lists", func() {
 		b := reqmeta.New()
 		for i := range 500 {
-			b.AddFile("f" + itoa(i))
+			b.AddFileRead("f" + itoa(i))
 		}
-		files, ok := b.Map()["files"].([]string)
+		files, ok := b.Map()["files_read"].([]string)
 		Expect(ok).To(BeTrue())
 		Expect(len(files)).To(Equal(200)) // maxList
-	})
-
-	It("ignores empty values", func() {
-		b := reqmeta.New()
-		b.AddFile("")
-		b.AddCommand("")
-		b.AddTool("")
-		b.AddToolCall("")
-		Expect(b.Map()).To(BeNil())
 	})
 })
 

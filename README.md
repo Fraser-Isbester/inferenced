@@ -201,9 +201,10 @@ It shows spend totals (by model / team, per day/month/rolling window), a **live 
 
 Every metered request stores a bounded, structured **metadata blob** parsed from the request body — the seed for later "impact of AI usage" analytics. Because coding agents replay the whole conversation on each call, one request reveals a lot:
 
-- `tools` available and `tool_call_counts` by name
-- `files` touched (from Read/Edit/Write tool inputs)
-- `commands` run (from Bash tool inputs — captures `git commit`, `gh pr create`, …)
+- `tools_available` (catalog size) and `tool_call_counts` by name
+- `files_read` / `files_edited` / `files_created` and an `edits` count — what changed, not just what was viewed
+- `commands` run, classified into higher-level activity: `git_commits`, `prs_opened`, `git_pushes`, `tests_run`, `builds`
+- `tool_failures` (from Anthropic `is_error` tool results)
 - `cwd`, `git_repo`, `git_branch` (parsed from the agent's system-prompt environment, Anthropic)
 - `message_count`
 
