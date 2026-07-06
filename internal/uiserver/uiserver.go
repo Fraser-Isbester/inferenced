@@ -40,6 +40,7 @@ type Store interface {
 	EventMetadata(rowID int64) (string, error)
 	Spend(scope, id string, since time.Time) (float64, error)
 	ListArtifacts(since time.Time, limit int) ([]store.ArtifactRow, error)
+	SubjectStats(since time.Time) ([]store.SubjectStat, error)
 }
 
 // Handler builds the dashboard HTTP handler. st is the ledger read handle;
@@ -91,6 +92,15 @@ func Handler(st Store, cfgPath string) http.Handler {
 		writeJSON(w, gauges)
 	})
 
+	mux.HandleFunc("/api/overview", func(w http.ResponseWriter, _ *http.Request) {
+		ov, err := buildOverview(st, cfgPath, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, ov)
+	})
+
 	mux.HandleFunc("/api/rules", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -102,6 +112,17 @@ func Handler(st Store, cfgPath string) http.Handler {
 			writeJSON(w, rulesFrom(cfg))
 		case http.MethodPut:
 			handleRulesPut(w, r, cfgPath)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/api/limit", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			handleLimitPut(w, r, cfgPath)
+		case http.MethodDelete:
+			handleLimitDelete(w, r, cfgPath)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

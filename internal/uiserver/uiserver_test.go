@@ -120,6 +120,67 @@ var _ = Describe("Handler", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 	})
 
+	It("returns users/teams with status at /api/overview", func() {
+		resp, err := http.Get(srv.URL + "/api/overview")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		var ov struct {
+			Enforcement struct {
+				Enabled bool `json:"enabled"`
+			} `json:"enforcement"`
+			Subjects []map[string]any `json:"subjects"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&ov)).To(Succeed())
+		Expect(ov.Enforcement.Enabled).To(BeTrue())
+		// The seeded event is dev-1 on team platform; team platform has a $5/day
+		// limit and $1.50 spent → a user row and a team row, team not yet alerting.
+		var team map[string]any
+		for _, s := range ov.Subjects {
+			if s["kind"] == "team" && s["id"] == "platform" {
+				team = s
+			}
+		}
+		Expect(team).NotTo(BeNil())
+		Expect(team["block_threshold_usd"]).To(Equal(5.0))
+		Expect(team["status"]).To(Equal("ok"))
+	})
+
+	It("upserts and deletes a single limit via /api/limit", func() {
+		body := `{"scope":"developer","id":"alice","period":"day","limit_usd":25,"downgrade_at":0.5,"block_at":1.0}`
+		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/limit", strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).NotTo(HaveOccurred())
+		_ = resp.Body.Close()
+		Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
+
+		saved, err := config.Load(cfgPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(saved.Enforcement.Enabled).To(BeTrue())
+		var found *config.LimitYAML
+		for i := range saved.Enforcement.Limits {
+			if saved.Enforcement.Limits[i].ID == "alice" {
+				found = &saved.Enforcement.Limits[i]
+			}
+		}
+		Expect(found).NotTo(BeNil())
+		Expect(found.LimitUSD).To(Equal(25.0))
+
+		// Delete it again.
+		delReq, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/limit?scope=developer&id=alice&period=day", nil)
+		delResp, err := http.DefaultClient.Do(delReq)
+		Expect(err).NotTo(HaveOccurred())
+		_ = delResp.Body.Close()
+		Expect(delResp.StatusCode).To(Equal(http.StatusNoContent))
+
+		after, err := config.Load(cfgPath)
+		Expect(err).NotTo(HaveOccurred())
+		for _, l := range after.Enforcement.Limits {
+			Expect(l.ID).NotTo(Equal("alice"))
+		}
+	})
+
 	It("returns produced artifacts at /api/artifacts", func() {
 		resp, err := http.Get(srv.URL + "/api/artifacts?period=rolling&window=720h")
 		Expect(err).NotTo(HaveOccurred())

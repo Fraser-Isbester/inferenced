@@ -147,6 +147,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			DeveloperID:     devID,
 			Team:            opts.Team,
 			OSUser:          identity.OSUser(),
+			Client:          identity.Client(pr.In),
 			Method:          out.Method,
 			Path:            out.URL.Path,
 			Model:           info.Model,

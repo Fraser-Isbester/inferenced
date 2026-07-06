@@ -54,3 +54,29 @@ var _ = Describe("artifacts", func() {
 		Expect(rows).To(BeEmpty())
 	})
 })
+
+var _ = Describe("SubjectStats", func() {
+	It("aggregates spend per developer and team with the latest client", func() {
+		st, err := store.Open(filepath.Join(GinkgoT().TempDir(), "subj.db"))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = st.Close() })
+
+		st.Emit(telemetry.Event{RequestID: "1", TimestampUnixMs: 1000, DeveloperID: "alice", Team: "platform", Client: "Cursor", Status: 200, CostUSD: 2})
+		st.Emit(telemetry.Event{RequestID: "2", TimestampUnixMs: 2000, DeveloperID: "alice", Team: "platform", Client: "Claude Code", Status: 200, CostUSD: 3})
+		st.Emit(telemetry.Event{RequestID: "3", TimestampUnixMs: 1500, DeveloperID: "bob", Team: "ml", Client: "aider", Status: 200, CostUSD: 5})
+
+		stats, err := st.SubjectStats(time.UnixMilli(0))
+		Expect(err).NotTo(HaveOccurred())
+
+		byKey := map[string]store.SubjectStat{}
+		for _, s := range stats {
+			byKey[s.Kind+":"+s.ID] = s
+		}
+		Expect(byKey["user:alice"].SpentUSD).To(Equal(5.0))
+		Expect(byKey["user:alice"].Client).To(Equal("Claude Code")) // latest wins
+		Expect(byKey["user:alice"].Team).To(Equal("platform"))
+		Expect(byKey["user:bob"].SpentUSD).To(Equal(5.0))
+		Expect(byKey["team:platform"].SpentUSD).To(Equal(5.0))
+		Expect(byKey["team:ml"].SpentUSD).To(Equal(5.0))
+	})
+})

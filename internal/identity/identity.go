@@ -57,6 +57,43 @@ func Resolve(r *http.Request, overrideID, team string) (devID, teamOut string) {
 	return DeveloperID(Credential(r)), team
 }
 
+// Client returns a friendly name for the coding agent / client that made the
+// request, classified from the User-Agent header (e.g. "Claude Code", "Cursor").
+// Unknown agents fall back to the leading User-Agent product token; an absent
+// header yields "".
+func Client(r *http.Request) string {
+	ua := strings.ToLower(r.Header.Get("User-Agent"))
+	switch {
+	case ua == "":
+		return ""
+	case strings.Contains(ua, "claude-cli"), strings.Contains(ua, "claude-code"):
+		return "Claude Code"
+	case strings.Contains(ua, "cursor"):
+		return "Cursor"
+	case strings.Contains(ua, "aider"):
+		return "aider"
+	case strings.Contains(ua, "copilot"):
+		return "Copilot"
+	case strings.Contains(ua, "cline"):
+		return "Cline"
+	case strings.Contains(ua, "windsurf"), strings.Contains(ua, "codeium"):
+		return "Windsurf"
+	case strings.Contains(ua, "openai"):
+		return "OpenAI SDK"
+	case strings.Contains(ua, "anthropic"):
+		return "Anthropic SDK"
+	case strings.Contains(ua, "genai"), strings.Contains(ua, "google-api"):
+		return "Gemini SDK"
+	default:
+		// Fall back to the leading product token, e.g. "curl/8.1" -> "curl".
+		token := ua
+		if i := strings.IndexAny(token, "/ "); i > 0 {
+			token = token[:i]
+		}
+		return token
+	}
+}
+
 // OSUser returns the local operating-system username, or "unknown" if it cannot
 // be determined.
 func OSUser() string {

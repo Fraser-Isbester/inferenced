@@ -126,6 +126,7 @@ func migrate(db *sql.DB) error {
 		{name: "trace_id", typ: "TEXT"},
 		{name: "span_id", typ: "TEXT"},
 		{name: "metadata", typ: "TEXT"},
+		{name: "client", typ: "TEXT"},
 	})
 }
 
@@ -179,8 +180,8 @@ func (s *Store) Emit(e telemetry.Event) {
 	const q = `INSERT INTO events (
 		request_id, ts_unix_ms, developer_id, team, provider, model, stream,
 		status, input_tokens, output_tokens, tokens_approximated, cost_usd, duration_ms,
-		trace_id, span_id, metadata
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		trace_id, span_id, metadata, client
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	if _, err := s.db.Exec(q,
 		e.RequestID,
@@ -199,6 +200,7 @@ func (s *Store) Emit(e telemetry.Event) {
 		e.TraceID,
 		e.SpanID,
 		e.Metadata,
+		e.Client,
 	); err != nil {
 		log.Printf("[STORE] insert event %s: %v", e.RequestID, err)
 	}
@@ -270,6 +272,7 @@ type EventRow struct {
 	Model           string  `json:"model"`
 	DeveloperID     string  `json:"developer_id"`
 	Team            string  `json:"team"`
+	Client          string  `json:"client"`
 	Status          int     `json:"status"`
 	InputTokens     int     `json:"input_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
@@ -278,7 +281,7 @@ type EventRow struct {
 }
 
 // eventCols is the fixed SELECT list shared by the event-row queries.
-const eventCols = `rowid, ts_unix_ms, provider, model, developer_id, team, status, input_tokens, output_tokens, cost_usd, duration_ms`
+const eventCols = `rowid, ts_unix_ms, provider, model, developer_id, team, client, status, input_tokens, output_tokens, cost_usd, duration_ms`
 
 // scanEventRows scans a result set produced with eventCols into EventRow values.
 func scanEventRows(rows *sql.Rows) ([]EventRow, error) {
@@ -287,7 +290,7 @@ func scanEventRows(rows *sql.Rows) ([]EventRow, error) {
 	for rows.Next() {
 		var r EventRow
 		if err := rows.Scan(&r.RowID, &r.TimestampUnixMs, &r.Provider, &r.Model,
-			&r.DeveloperID, &r.Team, &r.Status, &r.InputTokens, &r.OutputTokens,
+			&r.DeveloperID, &r.Team, &r.Client, &r.Status, &r.InputTokens, &r.OutputTokens,
 			&r.CostUSD, &r.DurationMs); err != nil {
 			return nil, fmt.Errorf("scan event row: %w", err)
 		}
@@ -345,6 +348,67 @@ func (s *Store) EventsSince(sinceRowID int64, limit int) ([]EventRow, int64, err
 		maxRowID = out[n-1].RowID // ascending, so last is max
 	}
 	return out, maxRowID, nil
+}
+
+// SubjectStat is per-subject (developer or team) activity since a given time:
+// total spend plus, for developers, the latest team and client seen.
+type SubjectStat struct {
+	Kind     string // "user" | "team"
+	ID       string
+	Team     string // developers only: their most recent team attribution
+	Client   string // developers only: their most recent client/agent
+	SpentUSD float64
+}
+
+// SubjectStats returns spend per developer and per team since the given time.
+// For developers, Team and Client are taken from the most recent event (via
+// SQLite's bare-column-follows-MAX rule). Empty ids/teams are skipped.
+func (s *Store) SubjectStats(since time.Time) ([]SubjectStat, error) {
+	sinceMs := since.UnixMilli()
+	var out []SubjectStat
+
+	// Developers: SUM aggregates the group; because there is exactly one MAX(),
+	// the bare team/client columns come from the latest row in each group.
+	const devQ = `SELECT developer_id, COALESCE(SUM(cost_usd), 0), team, client, MAX(ts_unix_ms)
+		FROM events WHERE ts_unix_ms >= ? AND developer_id != '' GROUP BY developer_id`
+	rows, err := s.db.Query(devQ, sinceMs)
+	if err != nil {
+		return nil, fmt.Errorf("query developer stats: %w", err)
+	}
+	for rows.Next() {
+		var st SubjectStat
+		var maxTS int64
+		if err := rows.Scan(&st.ID, &st.SpentUSD, &st.Team, &st.Client, &maxTS); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan developer stat: %w", err)
+		}
+		st.Kind = "user"
+		out = append(out, st)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate developer stats: %w", err)
+	}
+	_ = rows.Close()
+
+	const teamQ = `SELECT team, COALESCE(SUM(cost_usd), 0) FROM events
+		WHERE ts_unix_ms >= ? AND team != '' GROUP BY team`
+	trows, err := s.db.Query(teamQ, sinceMs)
+	if err != nil {
+		return nil, fmt.Errorf("query team stats: %w", err)
+	}
+	defer func() { _ = trows.Close() }()
+	for trows.Next() {
+		st := SubjectStat{Kind: "team"}
+		if err := trows.Scan(&st.ID, &st.SpentUSD); err != nil {
+			return nil, fmt.Errorf("scan team stat: %w", err)
+		}
+		out = append(out, st)
+	}
+	if err := trows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate team stats: %w", err)
+	}
+	return out, nil
 }
 
 // ArtifactRow is a persisted artifact with its attribution, as surfaced to the

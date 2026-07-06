@@ -122,6 +122,72 @@ func (dto rulesDTO) toEnforcement() config.Enforcement {
 	return e
 }
 
+// handleLimitPut upserts a single limit (matched by scope+id+period) into the
+// config and enables enforcement, so a rule set from the dashboard takes effect.
+// Invalid input returns 400 and leaves the file untouched.
+func handleLimitPut(w http.ResponseWriter, r *http.Request, cfgPath string) {
+	var in limitDTO
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	next := config.LimitYAML{
+		Scope: in.Scope, ID: in.ID, Period: in.Period, Window: in.Window,
+		LimitUSD: in.LimitUSD, DowngradeAt: in.DowngradeAt, BlockAt: in.BlockAt,
+	}
+	replaced := false
+	for i, l := range cfg.Enforcement.Limits {
+		if l.Scope == next.Scope && l.ID == next.ID && l.Period == next.Period {
+			cfg.Enforcement.Limits[i] = next
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		cfg.Enforcement.Limits = append(cfg.Enforcement.Limits, next)
+	}
+	cfg.Enforcement.Enabled = true // a limit set from the UI is meant to be live
+
+	if _, err := cfg.EnforceLimits(); err != nil {
+		http.Error(w, "invalid rule: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := cfg.Save(cfgPath); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleLimitDelete removes the limit matching scope+id+period (query params).
+func handleLimitDelete(w http.ResponseWriter, r *http.Request, cfgPath string) {
+	q := r.URL.Query()
+	scope, id, period := q.Get("scope"), q.Get("id"), q.Get("period")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	kept := cfg.Enforcement.Limits[:0]
+	for _, l := range cfg.Enforcement.Limits {
+		if l.Scope == scope && l.ID == id && l.Period == period {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	cfg.Enforcement.Limits = kept
+	if err := cfg.Save(cfgPath); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleRulesPut validates an edited enforcement block and, if valid, writes it
 // back to the config file (which a running gateway hot-reloads). Invalid input
 // returns 400 and leaves the file untouched.

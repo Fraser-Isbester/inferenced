@@ -15,6 +15,30 @@ func TestIdentity(t *testing.T) {
 	RunSpecs(t, "Identity Suite")
 }
 
+var _ = Describe("Client", func() {
+	classify := func(ua string) string {
+		r := httptest.NewRequest("POST", "/", nil)
+		if ua != "" {
+			r.Header.Set("User-Agent", ua)
+		}
+		return identity.Client(r)
+	}
+
+	It("classifies known coding agents", func() {
+		Expect(classify("claude-cli/1.2.3 (external, cli)")).To(Equal("Claude Code"))
+		Expect(classify("Cursor/0.42")).To(Equal("Cursor"))
+		Expect(classify("openai-python/1.30")).To(Equal("OpenAI SDK"))
+	})
+
+	It("falls back to the leading product token for unknown agents", func() {
+		Expect(classify("curl/8.1.2")).To(Equal("curl"))
+	})
+
+	It("returns empty when no User-Agent is present", func() {
+		Expect(classify("")).To(Equal(""))
+	})
+})
+
 var _ = Describe("Credential", func() {
 	It("prefers x-api-key", func() {
 		r := httptest.NewRequest("POST", "/", nil)

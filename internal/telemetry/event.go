@@ -26,6 +26,9 @@ type Event struct {
 	Team string
 	// OSUser is the local operating-system username.
 	OSUser string
+	// Client is the coding agent / client that made the request (e.g. "Claude
+	// Code", "Cursor"), classified from the User-Agent. Empty when unknown.
+	Client string
 	// Method is the HTTP request method.
 	Method string
 	// Path is the HTTP request path.
