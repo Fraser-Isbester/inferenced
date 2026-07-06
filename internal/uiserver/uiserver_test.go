@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/Fraser-Isbester/inferenced/internal/artifact"
 	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/store"
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
@@ -42,6 +43,9 @@ var _ = Describe("Handler", func() {
 			Provider: "anthropic", Model: "claude-sonnet-4-5", DeveloperID: "dev-1",
 			Team: "platform", Status: 200, InputTokens: 10, OutputTokens: 5, CostUSD: 1.5,
 			Metadata: `{"files":["main.go"],"commands":["git status"]}`,
+			Artifacts: []artifact.Artifact{
+				{Kind: "pull_request", Source: "github", URL: "https://github.com/a/b/pull/3", Ref: "#3"},
+			},
 		})
 
 		// A config with two limits so the gauge/rules endpoints have data.
@@ -114,6 +118,19 @@ var _ = Describe("Handler", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = resp.Body.Close() }()
 		Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+	})
+
+	It("returns produced artifacts at /api/artifacts", func() {
+		resp, err := http.Get(srv.URL + "/api/artifacts?period=rolling&window=720h")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		var rows []map[string]any
+		Expect(json.NewDecoder(resp.Body).Decode(&rows)).To(Succeed())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]).To(HaveKeyWithValue("kind", "pull_request"))
+		Expect(rows[0]).To(HaveKeyWithValue("url", "https://github.com/a/b/pull/3"))
 	})
 
 	It("returns spend-vs-limit gauges at /api/limits", func() {

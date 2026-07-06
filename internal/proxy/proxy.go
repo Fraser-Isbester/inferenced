@@ -155,6 +155,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			TraceID:         traceID,
 			SpanID:          spanID,
 			Metadata:        metadataJSON,
+			Artifacts:       info.Artifacts,
 		}
 
 		logx.Request(reqID, out.Method, out.URL.Path, p.Name(), info.Model, devID, logx.Redact(cred))

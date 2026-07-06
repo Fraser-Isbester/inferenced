@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Fraser-Isbester/inferenced/internal/artifact"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/reqmeta"
 )
@@ -93,32 +94,46 @@ func (anthropicProvider) ParseRequest(_ *http.Request, body []byte) provider.Req
 		textLen += contentTextLen(m.Content)
 	}
 
+	metadata, artifacts := extract(req)
 	return provider.RequestInfo{
 		Model:             req.Model,
 		ApproxInputTokens: textLen / 4,
 		Stream:            req.Stream,
-		Metadata:          extractMetadata(req),
+		Metadata:          metadata,
+		Artifacts:         artifacts,
 	}
 }
 
-// contentBlock is the shape of a content block we mine: tool_use (name + input)
-// and tool_result (is_error). Input is decoded lazily so we can pull file/command
-// signals without imposing a schema on every tool.
+// contentBlock is the shape of a content block we mine: tool_use (id + name +
+// input) and tool_result (tool_use_id + content + is_error). Raw fields are
+// decoded lazily so we can pull signals without imposing a schema on every tool.
 type contentBlock struct {
-	Type    string          `json:"type"`
-	Name    string          `json:"name"`
-	Input   json.RawMessage `json:"input"`
-	IsError bool            `json:"is_error"`
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
 }
 
-// extractMetadata builds the bounded metadata blob from an Anthropic request:
-// the tool-catalog size, tool-call counts, files read/edited/created, shell
-// commands and the activity they represent, tool failures, and cwd/git context
-// parsed from the system prompt. Returns nil when nothing is captured.
-func extractMetadata(req messagesRequest) map[string]any {
+// extract builds both the metadata blob and the artifact list from a request.
+// It makes two passes: first to index tool_result text by tool_use_id, then to
+// walk tool_use blocks so each can be paired with the result it produced (which
+// is where forge links and commit shas live).
+func extract(req messagesRequest) (map[string]any, []artifact.Artifact) {
 	b := reqmeta.New()
 	b.SetMessageCount(len(req.Messages))
 	b.SetToolsAvailable(len(req.Tools))
+
+	type toolUse struct {
+		id    string
+		name  string
+		input map[string]any
+	}
+	var uses []toolUse
+	results := map[string]string{} // tool_use_id -> flattened result text
+
 	for _, m := range req.Messages {
 		var blocks []contentBlock
 		if err := json.Unmarshal(m.Content, &blocks); err != nil {
@@ -130,14 +145,48 @@ func extractMetadata(req messagesRequest) map[string]any {
 				var input map[string]any
 				_ = json.Unmarshal(blk.Input, &input)
 				b.AddToolUse(blk.Name, input)
+				uses = append(uses, toolUse{id: blk.ID, name: blk.Name, input: input})
 			case "tool_result":
 				b.AddToolResult(blk.IsError)
+				results[blk.ToolUseID] = flattenText(blk.Content)
 			}
 		}
 	}
+
+	interactions := make([]artifact.Interaction, 0, len(uses))
+	for _, u := range uses {
+		interactions = append(interactions, artifact.Interaction{
+			ToolName: u.name, Input: u.input, Result: results[u.id],
+		})
+	}
+
 	cwd, gitRepo, gitBranch := parseSystemEnv(req.System)
 	b.SetEnv(cwd, gitRepo, gitBranch)
-	return b.Map()
+	return b.Map(), artifact.Extract(interactions)
+}
+
+// flattenText renders a tool_result content field (a string or an array of
+// typed text blocks) to a single string for scanning.
+func flattenText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var sb strings.Builder
+		for _, p := range parts {
+			sb.WriteString(p.Text)
+			sb.WriteByte('\n')
+		}
+		return sb.String()
+	}
+	return ""
 }
 
 var (

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Fraser-Isbester/inferenced/internal/artifact"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/reqmeta"
 )
@@ -36,9 +37,11 @@ type request struct {
 // typed content parts, so it is decoded lazily. Assistant messages may carry
 // tool_calls (function name + JSON-string arguments).
 type message struct {
-	Role      string          `json:"role"`
-	Content   json.RawMessage `json:"content"`
-	ToolCalls []struct {
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	ToolCallID string          `json:"tool_call_id"` // set on role:"tool" result messages
+	ToolCalls  []struct {
+		ID       string `json:"id"`
 		Function struct {
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
@@ -79,31 +82,76 @@ func ParseRequest(r *http.Request, body []byte) provider.RequestInfo {
 		}
 	}
 
+	metadata, artifacts := extract(req)
 	return provider.RequestInfo{
 		Model:             model,
 		ApproxInputTokens: textLen / 4,
 		Stream:            req.Stream,
-		Metadata:          extractMetadata(req),
+		Metadata:          metadata,
+		Artifacts:         artifacts,
 	}
 }
 
-// extractMetadata builds the bounded metadata blob from an OpenAI-wire request:
-// the tool-catalog size, tool-call counts, and files/commands (and the activity
-// they represent) mined from each tool call's JSON-string arguments. Returns nil
-// when nothing is captured. OpenAI has no tool-error flag on the wire, so
-// tool_failures is not populated here.
-func extractMetadata(req request) map[string]any {
+// extract builds the metadata blob and the artifact list from an OpenAI-wire
+// request. tool_calls (assistant) are paired with their role:"tool" result
+// messages by tool_call_id, so artifacts can read links/shas from the results.
+// OpenAI has no tool-error flag on the wire, so tool_failures is not populated.
+func extract(req request) (map[string]any, []artifact.Artifact) {
 	b := reqmeta.New()
 	b.SetMessageCount(len(req.Messages))
 	b.SetToolsAvailable(len(req.Tools))
+
+	type toolCall struct {
+		id    string
+		name  string
+		input map[string]any
+	}
+	var calls []toolCall
+	results := map[string]string{} // tool_call_id -> result text
+
 	for _, m := range req.Messages {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			results[m.ToolCallID] = contentText(m.Content)
+		}
 		for _, tc := range m.ToolCalls {
 			var input map[string]any
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
 			b.AddToolUse(tc.Function.Name, input)
+			calls = append(calls, toolCall{id: tc.ID, name: tc.Function.Name, input: input})
 		}
 	}
-	return b.Map()
+
+	interactions := make([]artifact.Interaction, 0, len(calls))
+	for _, c := range calls {
+		interactions = append(interactions, artifact.Interaction{
+			ToolName: c.name, Input: c.input, Result: results[c.id],
+		})
+	}
+	return b.Map(), artifact.Extract(interactions)
+}
+
+// contentText flattens a message content field (string or array of typed parts)
+// to a single string for scanning.
+func contentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var sb strings.Builder
+		for _, p := range parts {
+			sb.WriteString(p.Text)
+			sb.WriteByte('\n')
+		}
+		return sb.String()
+	}
+	return ""
 }
 
 // contentTextLen returns the number of text characters in a content field,

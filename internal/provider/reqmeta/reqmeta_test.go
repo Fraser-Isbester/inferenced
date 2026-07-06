@@ -36,23 +36,6 @@ var _ = Describe("Builder", func() {
 		Expect(m["tool_call_counts"]).To(HaveKeyWithValue("Edit", 2))
 	})
 
-	It("classifies commands into activity counters", func() {
-		b := reqmeta.New()
-		b.AddCommand("git commit -m wip")
-		b.AddCommand("git push origin main")
-		b.AddCommand("gh pr create --fill")
-		b.AddCommand("go test ./...")
-		b.AddCommand("go build -o bin/x ./cmd/x")
-		b.AddCommand("git show --stat && echo done") // no commit/build/test
-
-		m := b.Map()
-		Expect(m["git_commits"]).To(Equal(1))
-		Expect(m["git_pushes"]).To(Equal(1))
-		Expect(m["prs_opened"]).To(Equal(1))
-		Expect(m["tests_run"]).To(Equal(1))
-		Expect(m["builds"]).To(Equal(1))
-	})
-
 	It("counts tool failures from error results", func() {
 		b := reqmeta.New()
 		b.AddToolResult(false)

@@ -22,11 +22,6 @@ type Builder struct {
 	filesCreated   *cappedSet
 	commands       *cappedSet
 	edits          int
-	commits        int
-	prs            int
-	pushes         int
-	tests          int
-	builds         int
 	toolFailures   int
 	cwd            string
 	gitRepo        string
@@ -96,26 +91,12 @@ func (b *Builder) AddFileEdit(path string) {
 // AddFileCreate records a file written wholesale by a create/write-style tool.
 func (b *Builder) AddFileCreate(path string) { b.filesCreated.add(path) }
 
-// AddCommand records a shell command and classifies it into higher-level
-// activity counters (commits, PRs, pushes, tests, builds).
+// AddCommand records a shell command run by an exec-style tool. Higher-level
+// activity (commits, PRs, …) is derived separately by the artifact package,
+// which can also carry the resulting link; here we keep the raw command as
+// context.
 func (b *Builder) AddCommand(cmd string) {
 	b.commands.add(cmd)
-	l := strings.ToLower(cmd)
-	if strings.Contains(l, "git commit") {
-		b.commits++
-	}
-	if strings.Contains(l, "gh pr create") {
-		b.prs++
-	}
-	if strings.Contains(l, "git push") {
-		b.pushes++
-	}
-	if containsAny(l, "go test", "npm test", "npm run test", "pytest", "jest", "cargo test", "task test", "ginkgo", "vitest", "rspec") {
-		b.tests++
-	}
-	if containsAny(l, "go build", "npm run build", "make ", "cargo build", "task build", "docker build", "gradle build", "mvn ") {
-		b.builds++
-	}
 }
 
 // AddToolResult records the outcome of a tool result; isError increments the
@@ -156,11 +137,6 @@ func (b *Builder) Map() map[string]any {
 	putList(m, "files_created", b.filesCreated)
 	putList(m, "commands", b.commands)
 	putInt(m, "edits", b.edits)
-	putInt(m, "git_commits", b.commits)
-	putInt(m, "prs_opened", b.prs)
-	putInt(m, "git_pushes", b.pushes)
-	putInt(m, "tests_run", b.tests)
-	putInt(m, "builds", b.builds)
 	putInt(m, "tool_failures", b.toolFailures)
 	putStr(m, "cwd", b.cwd)
 	putStr(m, "git_repo", b.gitRepo)

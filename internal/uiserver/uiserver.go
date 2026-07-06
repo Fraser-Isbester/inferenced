@@ -39,6 +39,7 @@ type Store interface {
 	EventsSince(sinceRowID int64, limit int) ([]store.EventRow, int64, error)
 	EventMetadata(rowID int64) (string, error)
 	Spend(scope, id string, since time.Time) (float64, error)
+	ListArtifacts(since time.Time, limit int) ([]store.ArtifactRow, error)
 }
 
 // Handler builds the dashboard HTTP handler. st is the ledger read handle;
@@ -126,6 +127,16 @@ func Handler(st Store, cfgPath string) http.Handler {
 		_, _ = w.Write([]byte(`{"metadata":`))
 		_, _ = w.Write([]byte(meta))
 		_, _ = w.Write([]byte("}"))
+	})
+
+	mux.HandleFunc("/api/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		since := periodStart(r.URL.Query().Get("period"), r.URL.Query().Get("window"), time.Now())
+		rows, err := st.ListArtifacts(since, 500)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, rows)
 	})
 
 	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {

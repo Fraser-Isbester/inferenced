@@ -4,6 +4,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/Fraser-Isbester/inferenced/internal/artifact"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
 )
 
@@ -18,16 +19,18 @@ var _ = Describe("ParseRequest metadata", func() {
 	    {"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/Users/x/repo/main.go"}}]},
 	    {"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"boom","is_error":true}]},
 	    {"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Write","input":{"file_path":"/Users/x/repo/new.go"}}]},
-	    {"role":"assistant","content":[{"type":"tool_use","id":"t4","name":"Bash","input":{"command":"git commit -m wip"}}]}
+	    {"role":"assistant","content":[{"type":"tool_use","id":"t4","name":"Bash","input":{"command":"git commit -m wip"}}]},
+	    {"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"[main a1b2c3d] wip"}]}
 	  ]
 	}`
 
-	It("extracts catalog size, tool counts, files by op, activity, failures, and git env", func() {
+	It("extracts catalog size, tool counts, files by op, failures, git env, and a commit artifact", func() {
 		info := anthropic.New().ParseRequest(nil, []byte(body))
 		m := info.Metadata
 		Expect(m).NotTo(BeNil())
 		Expect(m).To(HaveKeyWithValue("tools_available", 4))
-		Expect(m).NotTo(HaveKey("tools")) // no catalog dump
+		Expect(m).NotTo(HaveKey("tools"))       // no catalog dump
+		Expect(m).NotTo(HaveKey("git_commits")) // classification moved to artifacts
 		Expect(m["tool_call_counts"]).To(HaveKeyWithValue("Read", 1))
 		Expect(m["tool_call_counts"]).To(HaveKeyWithValue("Edit", 1))
 		Expect(m["files_read"]).To(ConsistOf("/Users/x/repo/main.go"))
@@ -35,12 +38,16 @@ var _ = Describe("ParseRequest metadata", func() {
 		Expect(m["files_created"]).To(ConsistOf("/Users/x/repo/new.go"))
 		Expect(m["edits"]).To(Equal(1))
 		Expect(m["commands"]).To(ConsistOf("git commit -m wip"))
-		Expect(m["git_commits"]).To(Equal(1))
 		Expect(m["tool_failures"]).To(Equal(1))
 		Expect(m["cwd"]).To(Equal("/Users/x/repo"))
 		Expect(m["git_repo"]).To(Equal("/Users/x/repo"))
 		Expect(m["git_branch"]).To(Equal("main"))
-		Expect(m["message_count"]).To(Equal(6))
+		Expect(m["message_count"]).To(Equal(7))
+
+		// The commit sha comes from the paired tool result.
+		Expect(info.Artifacts).To(ConsistOf(artifact.Artifact{
+			Kind: "commit", Source: "git", Ref: "a1b2c3d", Title: "main",
+		}))
 	})
 
 	It("returns nil metadata for a plain prompt with no tools", func() {

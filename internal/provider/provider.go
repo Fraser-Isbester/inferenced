@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/Fraser-Isbester/inferenced/internal/artifact"
 )
 
 // RequestInfo captures the metadata extracted from an inference request body.
@@ -29,6 +31,10 @@ type RequestInfo struct {
 	// context, message count) for later usage analytics. Nil when nothing was
 	// captured; it never contains raw prompt or file-content text.
 	Metadata map[string]any
+	// Artifacts are the linkable business outcomes (PRs, commits, pushes, …)
+	// produced during the request, derived from tool calls and their results.
+	// Nil when none were produced.
+	Artifacts []artifact.Artifact
 }
 
 // Usage holds the token accounting for a single inference response.

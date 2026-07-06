@@ -17,6 +17,7 @@ import (
 	// Register the pure-Go SQLite driver under the name "sqlite".
 	_ "modernc.org/sqlite"
 
+	"github.com/Fraser-Isbester/inferenced/internal/artifact"
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
 )
 
@@ -96,6 +97,23 @@ func migrate(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_developer ON events (developer_id, ts_unix_ms)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_team ON events (team, ts_unix_ms)`,
+		// artifacts: linkable business outcomes, deduplicated by dedup_key so the
+		// same PR/commit re-seen across turns is recorded once (first sighting
+		// wins attribution).
+		`CREATE TABLE IF NOT EXISTS artifacts (
+			dedup_key TEXT,
+			kind TEXT,
+			source TEXT,
+			url TEXT,
+			ref TEXT,
+			title TEXT,
+			developer_id TEXT,
+			team TEXT,
+			first_seen_ms INTEGER,
+			request_id TEXT
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_dedup ON artifacts (dedup_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_seen ON artifacts (first_seen_ms)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -183,6 +201,27 @@ func (s *Store) Emit(e telemetry.Event) {
 		e.Metadata,
 	); err != nil {
 		log.Printf("[STORE] insert event %s: %v", e.RequestID, err)
+	}
+
+	s.insertArtifacts(e)
+}
+
+// insertArtifacts upserts the event's artifacts, deduplicated by dedup_key so a
+// PR/commit seen across many turns is recorded once with its first-sighting
+// attribution. INSERT OR IGNORE relies on the unique dedup_key index.
+func (s *Store) insertArtifacts(e telemetry.Event) {
+	const q = `INSERT OR IGNORE INTO artifacts (
+		dedup_key, kind, source, url, ref, title, developer_id, team, first_seen_ms, request_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	for _, a := range e.Artifacts {
+		key := artifact.DedupKey(a)
+		if key == "" {
+			continue // unidentifiable; nothing to dedup or link on
+		}
+		if _, err := s.db.Exec(q, key, a.Kind, a.Source, a.URL, a.Ref, a.Title,
+			e.DeveloperID, e.Team, e.TimestampUnixMs, e.RequestID); err != nil {
+			log.Printf("[STORE] insert artifact %s: %v", key, err)
+		}
 	}
 }
 
@@ -306,6 +345,45 @@ func (s *Store) EventsSince(sinceRowID int64, limit int) ([]EventRow, int64, err
 		maxRowID = out[n-1].RowID // ascending, so last is max
 	}
 	return out, maxRowID, nil
+}
+
+// ArtifactRow is a persisted artifact with its attribution, as surfaced to the
+// dashboard.
+type ArtifactRow struct {
+	Kind        string `json:"kind"`
+	Source      string `json:"source"`
+	URL         string `json:"url,omitempty"`
+	Ref         string `json:"ref,omitempty"`
+	Title       string `json:"title,omitempty"`
+	DeveloperID string `json:"developer_id"`
+	Team        string `json:"team"`
+	FirstSeenMs int64  `json:"first_seen_ms"`
+}
+
+// ListArtifacts returns artifacts first seen since the given time, most recent
+// first, up to limit. The query is read-only and fully parameterized.
+func (s *Store) ListArtifacts(since time.Time, limit int) ([]ArtifactRow, error) {
+	const q = `SELECT kind, source, url, ref, title, developer_id, team, first_seen_ms
+		FROM artifacts WHERE first_seen_ms >= ? ORDER BY first_seen_ms DESC LIMIT ?`
+	rows, err := s.db.Query(q, since.UnixMilli(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query artifacts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ArtifactRow
+	for rows.Next() {
+		var a ArtifactRow
+		if err := rows.Scan(&a.Kind, &a.Source, &a.URL, &a.Ref, &a.Title,
+			&a.DeveloperID, &a.Team, &a.FirstSeenMs); err != nil {
+			return nil, fmt.Errorf("scan artifact: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate artifacts: %w", err)
+	}
+	return out, nil
 }
 
 // EventMetadata returns the stored metadata JSON blob for a single event by

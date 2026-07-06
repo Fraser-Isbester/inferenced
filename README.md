@@ -203,10 +203,23 @@ Every metered request stores a bounded, structured **metadata blob** parsed from
 
 - `tools_available` (catalog size) and `tool_call_counts` by name
 - `files_read` / `files_edited` / `files_created` and an `edits` count — what changed, not just what was viewed
-- `commands` run, classified into higher-level activity: `git_commits`, `prs_opened`, `git_pushes`, `tests_run`, `builds`
+- `commands` run (raw shell commands)
 - `tool_failures` (from Anthropic `is_error` tool results)
 - `cwd`, `git_repo`, `git_branch` (parsed from the agent's system-prompt environment, Anthropic)
 - `message_count`
+
+### Artifacts — tying usage to business impact
+
+Beyond the metadata blob, inferenced does a **second-order pass** to extract the linkable outcomes an agent actually produced, into a deduplicated `artifacts` table you can query and join to spend:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | forge-neutral type: `pull_request`, `commit`, `push`, `branch`, `issue`, `release` |
+| `source` | `github`, `gitlab`, `bitbucket`, `jira`, `git`, … (derived, never hard-coded) |
+| `url` / `ref` | the link (a PR URL, commit SHA, issue key like `PROJ-123`) |
+| `developer` / `team` / `first_seen` | attribution |
+
+The model is **forge-agnostic** — a GitHub PR, GitLab MR, and Bitbucket PR all become `kind: pull_request` with a different `source`. Extraction is **command-gated and reads the link from the tool _result_**, so it records what was *produced* (`gh pr create` printing a new PR URL) rather than merely referenced (`gh pr view`). Artifacts are deduped by URL/ref (a PR re-seen across turns is recorded once, with first-sighting attribution) and surfaced in the dashboard's "AI-produced artifacts" table with real links.
 
 It is captured from the **request only** (Anthropic + OpenAI-wire; Gemini/Ollama record `message_count`), size-capped, and **excludes raw prompt and file-content text**. The blob is stored on each ledger row; the dashboard's live feed shows it when you click a request. Nothing is sent anywhere — it lives in your local SQLite ledger.
 

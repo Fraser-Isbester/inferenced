@@ -5,6 +5,8 @@ package telemetry
 import (
 	"fmt"
 	"sync"
+
+	"github.com/Fraser-Isbester/inferenced/internal/artifact"
 )
 
 // Event is the structured record emitted once an intercepted inference request
@@ -56,6 +58,10 @@ type Event struct {
 	// (tools, files, commands, cwd/git context, counts) extracted from the
 	// request body for later usage analytics. Empty when nothing was captured.
 	Metadata string
+	// Artifacts are the linkable business outcomes (PRs, commits, …) produced
+	// during the request. They are persisted to a deduplicated artifacts table,
+	// not the event row itself.
+	Artifacts []artifact.Artifact
 }
 
 // Sink records the final [RESPONSE] Event. Implementations must be safe for

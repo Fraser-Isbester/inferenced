@@ -42,6 +42,9 @@
   input.cell { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:3px 6px; width:100%; font:inherit; box-sizing:border-box; }
   td .del { color:#f87171; cursor:pointer; user-select:none; }
   .ok { color:#4ade80; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .kind { text-transform:capitalize; }
 </style>
 </head>
 <body>
@@ -63,6 +66,12 @@
     <div class="card"><div class="k">Total spend</div><div class="v" id="total-usd">$0.00</div></div>
     <div class="card"><div class="k">Requests</div><div class="v" id="total-reqs">0</div></div>
   </div>
+
+  <section>
+    <h2>AI-produced artifacts <span class="muted" style="text-transform:none;letter-spacing:0">— PRs, commits &amp; more, last 30 days</span></h2>
+    <table><thead><tr><th>Type</th><th>Ref</th><th>Source</th><th>Dev</th><th>When</th></tr></thead>
+    <tbody id="artifacts"></tbody></table>
+  </section>
 
   <section>
     <h2>Limits</h2>
@@ -245,6 +254,27 @@ $("add-limit").addEventListener("click", () => addRuleRow());
 $("save-rules").addEventListener("click", saveRules);
 loadRules();
 setInterval(loadLimits, 5000);
+
+// --- AI-produced artifacts ---
+async function loadArtifacts() {
+  const tb = $("artifacts");
+  let rows = [];
+  try { const res = await fetch("/api/artifacts?period=rolling&window=720h"); if (res.ok) rows = await res.json(); } catch (_) {}
+  tb.innerHTML = "";
+  if (!rows || !rows.length) { tb.innerHTML = `<tr><td colspan="5" class="muted">none yet</td></tr>`; return; }
+  rows.forEach((a) => {
+    const label = esc(a.ref || a.url || "");
+    const ref = a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${label}</a>` : label;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="kind">${esc((a.kind || "").replace(/_/g, " "))}</td>`
+      + `<td>${ref} <span class="muted">${esc(a.title || "")}</span></td>`
+      + `<td>${esc(a.source)}</td><td class="muted">${esc(a.developer_id || "")}</td>`
+      + `<td>${a.first_seen_ms ? new Date(a.first_seen_ms).toLocaleString() : ""}</td>`;
+    tb.appendChild(tr);
+  });
+}
+loadArtifacts();
+setInterval(loadArtifacts, 10000);
 
 const es = new EventSource("/api/stream");
 es.onmessage = (ev) => { try { addLive(JSON.parse(ev.data)); } catch (_) {} };
