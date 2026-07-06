@@ -127,12 +127,16 @@ func buildOverview(st Store, cfgPath string, now time.Time) (overviewResponse, e
 		resp.Subjects = append(resp.Subjects, s)
 	}
 
-	// Most at-risk first (by percent of budget), then by spend.
+	// Users first, then teams; within each group, most at-risk first.
 	sort.SliceStable(resp.Subjects, func(i, j int) bool {
-		if resp.Subjects[i].Pct != resp.Subjects[j].Pct {
-			return resp.Subjects[i].Pct > resp.Subjects[j].Pct
+		a, b := resp.Subjects[i], resp.Subjects[j]
+		if (a.Kind == "user") != (b.Kind == "user") {
+			return a.Kind == "user"
 		}
-		return resp.Subjects[i].SpentUSD > resp.Subjects[j].SpentUSD
+		if a.Pct != b.Pct {
+			return a.Pct > b.Pct
+		}
+		return a.SpentUSD > b.SpentUSD
 	})
 	return resp, nil
 }

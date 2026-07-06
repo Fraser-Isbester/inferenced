@@ -141,6 +141,7 @@ async function loadOverview() {
 
 function subjectRow(s) {
   const st = statusStyle[s.status] || statusStyle.none;
+  const name = s.kind === "team" ? "team " + s.id : s.id;
   const sub = s.kind === "team" ? "agents" : (s.client || "—");
   const limitLabel = s.limit_usd ? `${usd(s.spent_usd)} / ${usd(s.limit_usd)}` : usd(s.spent_usd);
   const pillText = st.text(s);
@@ -154,7 +155,7 @@ function subjectRow(s) {
   el.className = "subj";
   el.innerHTML =
     `<div class="subj-head">
-       <div class="subj-name"><b>${esc(s.id)}</b> · <span class="client">${esc(sub)}</span></div>
+       <div class="subj-name"><b>${esc(name)}</b> · <span class="client">${esc(sub)}</span></div>
        <span class="spacer"></span>
        <span class="amount">${limitLabel.replace(/\$[\d.]+/, (m,i)=> i===0? `<b>${m}</b>`:m)}</span>
        ${pillText ? `<span class="pill ${st.cls}">${esc(pillText)}</span>` : ""}
@@ -261,8 +262,12 @@ setInterval(loadOverview, 5000);
 setInterval(loadArtifacts, 15000);
 setInterval(loadSpend, 8000);
 
-const es = new EventSource("/api/stream");
-es.onmessage = (ev) => { try { addLive(JSON.parse(ev.data)); } catch (_) {} };
+// The live feed holds an open SSE connection; skip it with ?nostream (used by
+// headless screenshot tooling that waits for network idle).
+if (!location.search.includes("nostream")) {
+  const es = new EventSource("/api/stream");
+  es.onmessage = (ev) => { try { addLive(JSON.parse(ev.data)); } catch (_) {} };
+}
 </script>
 </body>
 </html>

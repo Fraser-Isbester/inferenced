@@ -57,6 +57,38 @@ var _ = Describe("schema migration", func() {
 		Expect(meta).To(Equal(`{"files":["main.go"]}`))
 	})
 
+	It("reads rows written before later columns existed (NULL-safe queries)", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "legacy.db")
+
+		// A legacy DB with a row that predates trace_id/span_id/metadata/client,
+		// so those columns are NULL after migration.
+		raw, err := sql.Open("sqlite", path)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = raw.Exec(oldSchema)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = raw.Exec(`INSERT INTO events (request_id, ts_unix_ms, developer_id, team, provider, model, status, cost_usd)
+			VALUES ('old', ?, 'alice', 'platform', 'anthropic', 'claude-opus-4-8', 200, 0.5)`, time.Now().UnixMilli())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(raw.Close()).To(Succeed())
+
+		st, err := store.Open(path)
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = st.Close() }()
+
+		// None of these may error on the NULL client/trace/etc. columns.
+		subjects, err := st.SubjectStats(time.UnixMilli(0))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(subjects).To(ContainElement(HaveField("ID", "alice")))
+
+		events, _, err := st.RecentEvents(10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(events).To(HaveLen(1))
+		Expect(events[0].Model).To(Equal("claude-opus-4-8"))
+
+		_, err = st.SpendReport(time.UnixMilli(0))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
 	It("is idempotent when the columns already exist", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "new.db")
 		st1, err := store.Open(path)

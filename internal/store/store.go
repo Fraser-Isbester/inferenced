@@ -280,8 +280,11 @@ type EventRow struct {
 	DurationMs      int64   `json:"duration_ms"`
 }
 
-// eventCols is the fixed SELECT list shared by the event-row queries.
-const eventCols = `rowid, ts_unix_ms, provider, model, developer_id, team, client, status, input_tokens, output_tokens, cost_usd, duration_ms`
+// eventCols is the fixed SELECT list shared by the event-row queries. Text
+// columns are COALESCEd because columns added by a later migration (via ALTER
+// TABLE ADD COLUMN) are NULL on rows written by an earlier version, and scanning
+// NULL into a Go string errors.
+const eventCols = `rowid, ts_unix_ms, COALESCE(provider,''), COALESCE(model,''), COALESCE(developer_id,''), COALESCE(team,''), COALESCE(client,''), COALESCE(status,0), COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(cost_usd,0), COALESCE(duration_ms,0)`
 
 // scanEventRows scans a result set produced with eventCols into EventRow values.
 func scanEventRows(rows *sql.Rows) ([]EventRow, error) {
@@ -369,8 +372,10 @@ func (s *Store) SubjectStats(since time.Time) ([]SubjectStat, error) {
 
 	// Developers: SUM aggregates the group; because there is exactly one MAX(),
 	// the bare team/client columns come from the latest row in each group.
-	const devQ = `SELECT developer_id, COALESCE(SUM(cost_usd), 0), team, client, MAX(ts_unix_ms)
-		FROM events WHERE ts_unix_ms >= ? AND developer_id != '' GROUP BY developer_id`
+	// COALESCE team/client: they may be NULL on rows written before those columns
+	// existed, and scanning NULL into a string errors.
+	const devQ = `SELECT developer_id, COALESCE(SUM(cost_usd), 0), COALESCE(team, ''), COALESCE(client, ''), MAX(ts_unix_ms)
+		FROM events WHERE ts_unix_ms >= ? AND COALESCE(developer_id, '') != '' GROUP BY developer_id`
 	rows, err := s.db.Query(devQ, sinceMs)
 	if err != nil {
 		return nil, fmt.Errorf("query developer stats: %w", err)
@@ -392,7 +397,7 @@ func (s *Store) SubjectStats(since time.Time) ([]SubjectStat, error) {
 	_ = rows.Close()
 
 	const teamQ = `SELECT team, COALESCE(SUM(cost_usd), 0) FROM events
-		WHERE ts_unix_ms >= ? AND team != '' GROUP BY team`
+		WHERE ts_unix_ms >= ? AND COALESCE(team, '') != '' GROUP BY team`
 	trows, err := s.db.Query(teamQ, sinceMs)
 	if err != nil {
 		return nil, fmt.Errorf("query team stats: %w", err)
@@ -522,7 +527,7 @@ func (s *Store) SpendReport(since time.Time) (Report, error) {
 // interpolated from external input) and all values are bound as parameters.
 func (s *Store) groupBy(col string, sinceMs int64) ([]ReportRow, error) {
 	// #nosec G202 -- col is a fixed literal chosen by SpendReport, not input.
-	q := `SELECT ` + col + `, COALESCE(SUM(cost_usd), 0), COUNT(*) FROM events WHERE ts_unix_ms >= ? GROUP BY ` + col + ` ORDER BY SUM(cost_usd) DESC`
+	q := `SELECT COALESCE(` + col + `, ''), COALESCE(SUM(cost_usd), 0), COUNT(*) FROM events WHERE ts_unix_ms >= ? GROUP BY ` + col + ` ORDER BY SUM(cost_usd) DESC`
 	rows, err := s.db.Query(q, sinceMs)
 	if err != nil {
 		return nil, fmt.Errorf("query spend by %s: %w", col, err)
