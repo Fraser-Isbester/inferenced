@@ -10,7 +10,9 @@ package uiserver
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -19,6 +21,19 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/store"
 )
+
+// loadCfg reads the config at cfgPath, returning defaults when the file does not
+// exist yet. The dashboard must work before any config has been written, and
+// resolveConfigPath yields a concrete (possibly non-existent) default path that
+// config.Load would otherwise treat as a hard error.
+func loadCfg(cfgPath string) (*config.Config, error) {
+	if cfgPath != "" {
+		if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
+			return config.Default(), nil
+		}
+	}
+	return config.Load(cfgPath)
+}
 
 //go:embed assets/index.html
 var indexHTML []byte
@@ -72,7 +87,7 @@ func Handler(st Store, cfgPath string) http.Handler {
 	})
 
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, _ *http.Request) {
-		cfg, err := config.Load(cfgPath)
+		cfg, err := loadCfg(cfgPath)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -107,7 +122,7 @@ func Handler(st Store, cfgPath string) http.Handler {
 	mux.HandleFunc("/api/rules", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			cfg, err := config.Load(cfgPath)
+			cfg, err := loadCfg(cfgPath)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

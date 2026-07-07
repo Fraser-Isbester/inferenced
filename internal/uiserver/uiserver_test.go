@@ -194,6 +194,20 @@ var _ = Describe("Handler", func() {
 		Expect(rows[0]).To(HaveKeyWithValue("url", "https://github.com/a/b/pull/3"))
 	})
 
+	It("serves overview/rules/config even when the config file does not exist", func() {
+		// Mirrors `inferenced ui` with no config: resolveConfigPath yields a
+		// concrete but non-existent default path, which must degrade to defaults
+		// rather than 500 the endpoints.
+		missing := httptest.NewServer(uiserver.Handler(st, filepath.Join(GinkgoT().TempDir(), "does-not-exist.yaml")))
+		DeferCleanup(missing.Close)
+		for _, path := range []string{"/api/overview", "/api/rules", "/api/config", "/api/limits"} {
+			resp, err := http.Get(missing.URL + path)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(http.StatusOK), "path %s", path)
+			_ = resp.Body.Close()
+		}
+	})
+
 	It("includes headline totals in /api/overview", func() {
 		resp, err := http.Get(srv.URL + "/api/overview")
 		Expect(err).NotTo(HaveOccurred())

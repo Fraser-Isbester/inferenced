@@ -28,7 +28,7 @@ type limitGauge struct {
 // current spend and thresholds for each, over each limit's own period. A spend
 // lookup error fails soft to 0 so one bad row never blanks the whole view.
 func limitGauges(st Store, cfgPath string, now time.Time) ([]limitGauge, error) {
-	cfg, err := config.Load(cfgPath)
+	cfg, err := loadCfg(cfgPath)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func handleLimitPut(w http.ResponseWriter, r *http.Request, cfgPath string) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	cfg, err := config.Load(cfgPath)
+	cfg, err := loadCfg(cfgPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -168,7 +168,7 @@ func handleLimitPut(w http.ResponseWriter, r *http.Request, cfgPath string) {
 func handleLimitDelete(w http.ResponseWriter, r *http.Request, cfgPath string) {
 	q := r.URL.Query()
 	scope, id, period := q.Get("scope"), q.Get("id"), q.Get("period")
-	cfg, err := config.Load(cfgPath)
+	cfg, err := loadCfg(cfgPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -197,7 +197,7 @@ func handleRulesPut(w http.ResponseWriter, r *http.Request, cfgPath string) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	cfg, err := config.Load(cfgPath)
+	cfg, err := loadCfg(cfgPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

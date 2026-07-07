@@ -5,7 +5,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/enforce"
 )
 
@@ -50,7 +49,7 @@ type overviewResponse struct {
 // limit over that limit's own period.
 func buildOverview(st Store, cfgPath string, now time.Time) (overviewResponse, error) {
 	var resp overviewResponse
-	cfg, err := config.Load(cfgPath)
+	cfg, err := loadCfg(cfgPath)
 	if err != nil {
 		return resp, err
 	}
