@@ -396,8 +396,9 @@ func (s *Store) SubjectStats(since time.Time) ([]SubjectStat, error) {
 	}
 	_ = rows.Close()
 
-	const teamQ = `SELECT team, COALESCE(SUM(cost_usd), 0) FROM events
-		WHERE ts_unix_ms >= ? AND COALESCE(team, '') != '' GROUP BY team`
+	// Team-less traffic is bucketed under "unknown" so it always has a row.
+	const teamQ = `SELECT COALESCE(NULLIF(team, ''), 'unknown'), COALESCE(SUM(cost_usd), 0) FROM events
+		WHERE ts_unix_ms >= ? GROUP BY COALESCE(NULLIF(team, ''), 'unknown')`
 	trows, err := s.db.Query(teamQ, sinceMs)
 	if err != nil {
 		return nil, fmt.Errorf("query team stats: %w", err)
@@ -427,12 +428,14 @@ type ArtifactRow struct {
 	DeveloperID string `json:"developer_id"`
 	Team        string `json:"team"`
 	FirstSeenMs int64  `json:"first_seen_ms"`
+	// RequestID + FirstSeenMs identify the producing request (see EventByRequest).
+	RequestID string `json:"request_id"`
 }
 
 // ListArtifacts returns artifacts first seen since the given time, most recent
 // first, up to limit. The query is read-only and fully parameterized.
 func (s *Store) ListArtifacts(since time.Time, limit int) ([]ArtifactRow, error) {
-	const q = `SELECT kind, source, url, ref, title, developer_id, team, first_seen_ms
+	const q = `SELECT kind, source, url, ref, title, developer_id, team, first_seen_ms, COALESCE(request_id, '')
 		FROM artifacts WHERE first_seen_ms >= ? ORDER BY first_seen_ms DESC LIMIT ?`
 	rows, err := s.db.Query(q, since.UnixMilli(), limit)
 	if err != nil {
@@ -444,7 +447,7 @@ func (s *Store) ListArtifacts(since time.Time, limit int) ([]ArtifactRow, error)
 	for rows.Next() {
 		var a ArtifactRow
 		if err := rows.Scan(&a.Kind, &a.Source, &a.URL, &a.Ref, &a.Title,
-			&a.DeveloperID, &a.Team, &a.FirstSeenMs); err != nil {
+			&a.DeveloperID, &a.Team, &a.FirstSeenMs, &a.RequestID); err != nil {
 			return nil, fmt.Errorf("scan artifact: %w", err)
 		}
 		out = append(out, a)
@@ -453,6 +456,41 @@ func (s *Store) ListArtifacts(since time.Time, limit int) ([]ArtifactRow, error)
 		return nil, fmt.Errorf("iterate artifacts: %w", err)
 	}
 	return out, nil
+}
+
+// EventDetail is a single request's detail, used to tie an artifact back to the
+// request that produced it.
+type EventDetail struct {
+	RequestID       string  `json:"request_id"`
+	TimestampUnixMs int64   `json:"ts_unix_ms"`
+	Provider        string  `json:"provider"`
+	Model           string  `json:"model"`
+	DeveloperID     string  `json:"developer_id"`
+	Client          string  `json:"client"`
+	Status          int     `json:"status"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	CostUSD         float64 `json:"cost_usd"`
+	Metadata        string  `json:"metadata"`
+}
+
+// EventByRequest returns the request identified by (request_id, ts_unix_ms).
+// Artifacts store both, taken from their producing event, so this pinpoints the
+// exact request even though request ids reset across process restarts. Returns
+// sql.ErrNoRows when there is no match.
+func (s *Store) EventByRequest(requestID string, tsUnixMs int64) (EventDetail, error) {
+	const q = `SELECT COALESCE(request_id,''), ts_unix_ms, COALESCE(provider,''), COALESCE(model,''),
+		COALESCE(developer_id,''), COALESCE(client,''), COALESCE(status,0),
+		COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(cost_usd,0), COALESCE(metadata,'')
+		FROM events WHERE request_id = ? AND ts_unix_ms = ? LIMIT 1`
+	var d EventDetail
+	err := s.db.QueryRow(q, requestID, tsUnixMs).Scan(&d.RequestID, &d.TimestampUnixMs,
+		&d.Provider, &d.Model, &d.DeveloperID, &d.Client, &d.Status,
+		&d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.Metadata)
+	if err != nil {
+		return EventDetail{}, fmt.Errorf("query event for request %q: %w", requestID, err)
+	}
+	return d, nil
 }
 
 // EventMetadata returns the stored metadata JSON blob for a single event by

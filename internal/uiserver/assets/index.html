@@ -68,6 +68,10 @@
   pre.meta { margin:0; padding:10px 12px; background:#0a0c10; border-radius:6px; font:12px/1.5 ui-monospace,Menlo,monospace; color:var(--muted); max-height:280px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
   .status-ok { color:var(--ok); } .status-bad { color:var(--bad); }
   .empty { color:var(--muted); padding:14px 16px; }
+  .reqdetail { padding:6px 2px; font-size:13px; color:var(--muted); }
+  .reqdetail .k { text-transform:uppercase; font-size:11px; letter-spacing:.05em; }
+  .reqdetail .cost { color:var(--fg); font-variant-numeric:tabular-nums; }
+  .reqdetail .cmd { margin-top:6px; font:12px/1.5 ui-monospace,Menlo,monospace; color:var(--fg); background:#0a0c10; padding:6px 9px; border-radius:6px; }
 </style>
 </head>
 <body>
@@ -75,7 +79,8 @@
   <h1>inferenced</h1>
   <span class="sub">local admin <span class="live-dot" title="live"></span></span>
   <span class="spacer"></span>
-  <span class="stat" id="enf"></span>
+  <span class="stat" id="totals"></span>
+  <span class="stat" id="enf" style="margin-left:16px"></span>
 </header>
 <main>
   <section>
@@ -124,17 +129,21 @@ const statusStyle = {
   enforced:    { cls: "bad",  text: () => "ENFORCED" },
   none:        { cls: "none", text: () => "no limit" },
 };
-const barColor = { ok: "var(--ok)", alerting: "var(--warn)", downgrading: "var(--warn)", enforced: "var(--bad)", none: "var(--line)" };
+const barColor = { ok: "var(--ok)", alerting: "var(--warn)", downgrading: "var(--warn)", enforced: "var(--bad)", none: "var(--accent)" };
+let maxSpent = 0;
 
 async function loadOverview() {
-  let ov = { subjects: [], enforcement: {} };
+  let ov = { subjects: [], enforcement: {}, totals: {} };
   try { const r = await fetch("/api/overview"); if (r.ok) ov = await r.json(); } catch (_) {}
 
   const mode = ov.enforcement && ov.enforcement.enabled ? `enforcing (${esc(ov.enforcement.action)})` : "not enforcing";
   $("enf").innerHTML = `enforcement: <b>${mode}</b>` + (ov.downgrades && ov.downgrades.length ? ` · downgrade: <b>${esc(ov.downgrades.join(", "))}</b>` : "");
+  const t = ov.totals || {};
+  $("totals").innerHTML = `today <b>${usd4(t.today_usd)}</b> · ${t.today_requests || 0} req &nbsp;·&nbsp; ${t.window_days || 30}d <b>${usd4(t.window_usd)}</b> · ${t.window_requests || 0} req`;
 
   const box = $("subjects");
   if (!ov.subjects || !ov.subjects.length) { box.innerHTML = `<div class="empty">no activity yet</div>`; return; }
+  maxSpent = Math.max(0, ...ov.subjects.map((s) => s.spent_usd || 0));
   box.innerHTML = "";
   ov.subjects.forEach((s) => box.appendChild(subjectRow(s)));
 }
@@ -143,12 +152,21 @@ function subjectRow(s) {
   const st = statusStyle[s.status] || statusStyle.none;
   const name = s.kind === "team" ? "team " + s.id : s.id;
   const sub = s.kind === "team" ? "agents" : (s.client || "—");
-  const limitLabel = s.limit_usd ? `${usd(s.spent_usd)} / ${usd(s.limit_usd)}` : usd(s.spent_usd);
   const pillText = st.text(s);
-  const width = s.limit_usd ? clamp(s.spent_usd / (s.block_threshold_usd || s.limit_usd) * 100) : 0;
-  let ticks = "";
-  if (s.downgrade_threshold_usd && s.block_threshold_usd) {
-    ticks = `<span class="tick" style="left:${clamp(s.downgrade_threshold_usd / s.block_threshold_usd * 100)}%"></span>`;
+
+  let width, color, ticks = "", amountHTML;
+  if (s.limit_usd) {
+    width = clamp(s.spent_usd / (s.block_threshold_usd || s.limit_usd) * 100);
+    color = barColor[s.status];
+    amountHTML = `<b>${usd4(s.spent_usd)}</b> <span class="muted">/ ${usd(s.limit_usd)}</span>`;
+    if (s.downgrade_threshold_usd && s.block_threshold_usd) {
+      ticks = `<span class="tick" style="left:${clamp(s.downgrade_threshold_usd / s.block_threshold_usd * 100)}%"></span>`;
+    }
+  } else {
+    // No limit: show a comparative usage bar (share of the top spender).
+    width = maxSpent > 0 ? clamp(s.spent_usd / maxSpent * 100) : 0;
+    color = "var(--accent)";
+    amountHTML = `<b>${usd4(s.spent_usd)}</b>`;
   }
 
   const el = document.createElement("div");
@@ -157,10 +175,10 @@ function subjectRow(s) {
     `<div class="subj-head">
        <div class="subj-name"><b>${esc(name)}</b> · <span class="client">${esc(sub)}</span></div>
        <span class="spacer"></span>
-       <span class="amount">${limitLabel.replace(/\$[\d.]+/, (m,i)=> i===0? `<b>${m}</b>`:m)}</span>
+       <span class="amount">${amountHTML}</span>
        ${pillText ? `<span class="pill ${st.cls}">${esc(pillText)}</span>` : ""}
      </div>
-     <div class="gauge"><div class="gauge-fill" style="width:${width}%;background:${barColor[s.status]}"></div>${ticks}</div>`;
+     <div class="gauge"><div class="gauge-fill" style="width:${width}%;background:${color}"></div>${ticks}</div>`;
   el.appendChild(editor(s));
   el.querySelector(".subj-head").addEventListener("click", () => el.classList.toggle("open"));
   return el;
@@ -212,10 +230,38 @@ async function loadArtifacts() {
     const label = esc(a.ref || a.url || "");
     const ref = a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${label}</a>` : label;
     const tr = document.createElement("tr");
+    tr.className = "clickable";
     tr.innerHTML = `<td class="kind">${esc((a.kind||"").replace(/_/g," "))}</td><td>${ref} <span class="muted">${esc(a.title||"")}</span></td>`
       + `<td>${esc(a.source)}</td><td class="muted">${esc(a.developer_id||"")}</td><td>${a.first_seen_ms?new Date(a.first_seen_ms).toLocaleString():""}</td>`;
+    tr.addEventListener("click", () => toggleArtifactReq(tr, a));
     tb.appendChild(tr);
   });
+}
+
+// toggleArtifactReq expands an artifact row to show the request that produced
+// it — the tie from a business outcome back to its model, cost, and command.
+async function toggleArtifactReq(tr, a) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains("detail")) { next.remove(); return; }
+  let html = `<span class="muted">no associated request found</span>`;
+  try {
+    const r = await fetch(`/api/request?id=${encodeURIComponent(a.request_id||"")}&ts=${a.first_seen_ms||0}`);
+    if (r.ok) {
+      const d = await r.json();
+      let cmds = [];
+      try { cmds = (JSON.parse(d.metadata || "{}").commands) || []; } catch (_) {}
+      const producing = cmds.find((c) => /\b(pr|mr|issue|release)\s+create|git\s+(commit|push|checkout|switch|branch)/.test(c));
+      html = `<div class="reqdetail">`
+        + `<span class="k">produced by</span> <b>${esc(d.model)}</b> · ${esc(d.client||d.developer_id)} `
+        + `· <span class="cost">${usd4(d.cost_usd)}</span> · ${new Date(d.ts_unix_ms).toLocaleString()}`
+        + (producing ? `<div class="cmd">$ ${esc(producing)}</div>` : "")
+        + `</div>`;
+    }
+  } catch (_) {}
+  const dr = document.createElement("tr");
+  dr.className = "detail";
+  dr.innerHTML = `<td colspan="5">${html}</td>`;
+  tr.after(dr);
 }
 
 // ---------- Spend by model ----------

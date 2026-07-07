@@ -41,6 +41,7 @@ type Store interface {
 	Spend(scope, id string, since time.Time) (float64, error)
 	ListArtifacts(since time.Time, limit int) ([]store.ArtifactRow, error)
 	SubjectStats(since time.Time) ([]store.SubjectStat, error)
+	EventByRequest(requestID string, tsUnixMs int64) (store.EventDetail, error)
 }
 
 // Handler builds the dashboard HTTP handler. st is the ledger read handle;
@@ -158,6 +159,20 @@ func Handler(st Store, cfgPath string) http.Handler {
 			return
 		}
 		writeJSON(w, rows)
+	})
+
+	mux.HandleFunc("/api/request", func(w http.ResponseWriter, r *http.Request) {
+		ts, err := strconv.ParseInt(r.URL.Query().Get("ts"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid ts", http.StatusBadRequest)
+			return
+		}
+		d, err := st.EventByRequest(r.URL.Query().Get("id"), ts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		writeJSON(w, d)
 	})
 
 	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {

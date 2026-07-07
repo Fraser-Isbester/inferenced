@@ -104,10 +104,17 @@ func runServe(configPath, port string) {
 
 	resolver := buildPriceResolver(cfg)
 
+	// Unattributed traffic is bucketed under a default team so it always has a
+	// home in reporting and can be governed by a team rule.
+	team := cfg.Developer.Team
+	if team == "" {
+		team = "unknown"
+	}
+
 	sink := telemetry.MultiSink(sinks...)
 	rp := proxy.New(reg, sink, proxy.Options{
 		DeveloperID: cfg.Developer.ID,
-		Team:        cfg.Developer.Team,
+		Team:        team,
 		Pricing:     resolver,
 	})
 
@@ -121,7 +128,7 @@ func runServe(configPath, port string) {
 		log.Printf("enforcement is enabled but storage is off; spend can't be measured (no-op) — enable storage")
 	}
 	resolve := func(r *http.Request) (string, string) {
-		return identity.Resolve(r, cfg.Developer.ID, cfg.Developer.Team)
+		return identity.Resolve(r, cfg.Developer.ID, team)
 	}
 
 	initial, err := buildRuleset(cfg, spendFn)

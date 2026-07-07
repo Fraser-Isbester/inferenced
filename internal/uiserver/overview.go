@@ -33,6 +33,13 @@ type overviewResponse struct {
 		Enabled bool   `json:"enabled"`
 		Action  string `json:"action"`
 	} `json:"enforcement"`
+	Totals struct {
+		TodayUSD       float64 `json:"today_usd"`
+		TodayRequests  int     `json:"today_requests"`
+		WindowUSD      float64 `json:"window_usd"`
+		WindowRequests int     `json:"window_requests"`
+		WindowDays     int     `json:"window_days"`
+	} `json:"totals"`
 	Downgrades []string  `json:"downgrades"` // e.g. ["opus → claude-sonnet-4-5"]
 	Subjects   []subject `json:"subjects"`
 }
@@ -56,6 +63,17 @@ func buildOverview(st Store, cfgPath string, now time.Time) (overviewResponse, e
 		resp.Downgrades = append(resp.Downgrades, d.Match+" → "+d.To)
 	}
 
+	// Headline totals: today and the trailing discovery window.
+	if rep, err := st.SpendReport(periodStart("day", "", now)); err == nil {
+		resp.Totals.TodayUSD = rep.TotalUSD
+		resp.Totals.TodayRequests = rep.TotalRequests
+	}
+	if rep, err := st.SpendReport(now.Add(-discoveryWindow)); err == nil {
+		resp.Totals.WindowUSD = rep.TotalUSD
+		resp.Totals.WindowRequests = rep.TotalRequests
+	}
+	resp.Totals.WindowDays = int(discoveryWindow / (24 * time.Hour))
+
 	stats, err := st.SubjectStats(now.Add(-discoveryWindow))
 	if err != nil {
 		return resp, err
@@ -66,6 +84,7 @@ func buildOverview(st Store, cfgPath string, now time.Time) (overviewResponse, e
 	type key struct{ kind, id string }
 	seen := map[key]bool{}
 	clients := map[string]string{}
+	spentByKey := map[key]float64{} // spend already bucketed by SubjectStats
 	order := []key{}
 	addKey := func(kind, id string) {
 		k := key{kind, id}
@@ -77,6 +96,7 @@ func buildOverview(st Store, cfgPath string, now time.Time) (overviewResponse, e
 	}
 	for _, s := range stats {
 		addKey(s.Kind, s.ID)
+		spentByKey[key{s.Kind, s.ID}] = s.SpentUSD
 		if s.Kind == "user" {
 			clients[s.ID] = s.Client
 		}
@@ -119,9 +139,10 @@ func buildOverview(st Store, cfgPath string, now time.Time) (overviewResponse, e
 				s.Pct = int(spent / l.LimitUSD * 100)
 			}
 		} else {
-			// No limit: show 30-day spend for context, no gauge.
-			spent, _ := st.Spend(string(scope), k.id, now.Add(-discoveryWindow))
-			s.SpentUSD = spent
+			// No limit: use the spend already bucketed by SubjectStats (which
+			// folds team-less usage into "unknown"); a re-query by exact id would
+			// miss those rows.
+			s.SpentUSD = spentByKey[k]
 			s.Status = "none"
 		}
 		resp.Subjects = append(resp.Subjects, s)

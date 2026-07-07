@@ -79,4 +79,33 @@ var _ = Describe("SubjectStats", func() {
 		Expect(byKey["team:platform"].SpentUSD).To(Equal(5.0))
 		Expect(byKey["team:ml"].SpentUSD).To(Equal(5.0))
 	})
+
+	It("buckets team-less usage under an 'unknown' team", func() {
+		st, err := store.Open(filepath.Join(GinkgoT().TempDir(), "unk.db"))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = st.Close() })
+		st.Emit(telemetry.Event{RequestID: "1", TimestampUnixMs: 1000, DeveloperID: "solo", Status: 200, CostUSD: 3}) // no team
+
+		stats, err := st.SubjectStats(time.UnixMilli(0))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stats).To(ContainElement(And(HaveField("Kind", "team"), HaveField("ID", "unknown"))))
+	})
+})
+
+var _ = Describe("EventByRequest", func() {
+	It("pinpoints the producing request by id + timestamp", func() {
+		st, err := store.Open(filepath.Join(GinkgoT().TempDir(), "byreq.db"))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = st.Close() })
+		st.Emit(telemetry.Event{
+			RequestID: "7", TimestampUnixMs: 4242, DeveloperID: "alice", Client: "Claude Code",
+			Provider: "anthropic", Model: "claude-opus-4-8", Status: 200, CostUSD: 0.5,
+			Metadata: `{"commands":["gh pr create --fill"]}`,
+		})
+		d, err := st.EventByRequest("7", 4242)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(d.Model).To(Equal("claude-opus-4-8"))
+		Expect(d.CostUSD).To(Equal(0.5))
+		Expect(d.Metadata).To(ContainSubstring("gh pr create"))
+	})
 })

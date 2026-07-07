@@ -194,6 +194,37 @@ var _ = Describe("Handler", func() {
 		Expect(rows[0]).To(HaveKeyWithValue("url", "https://github.com/a/b/pull/3"))
 	})
 
+	It("includes headline totals in /api/overview", func() {
+		resp, err := http.Get(srv.URL + "/api/overview")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		var ov struct {
+			Totals struct {
+				TodayUSD      float64 `json:"today_usd"`
+				TodayRequests int     `json:"today_requests"`
+			} `json:"totals"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&ov)).To(Succeed())
+		Expect(ov.Totals.TodayUSD).To(Equal(1.5)) // the seeded event
+		Expect(ov.Totals.TodayRequests).To(Equal(1))
+	})
+
+	It("returns a producing request at /api/request", func() {
+		st.Emit(telemetry.Event{
+			RequestID: "rq1", TimestampUnixMs: 999000, DeveloperID: "dev-1",
+			Provider: "anthropic", Model: "claude-opus-4-8", Status: 200, CostUSD: 0.02,
+			Metadata: `{"commands":["gh pr create"]}`,
+		})
+		resp, err := http.Get(srv.URL + "/api/request?id=rq1&ts=999000")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = resp.Body.Close() }()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		var d map[string]any
+		Expect(json.NewDecoder(resp.Body).Decode(&d)).To(Succeed())
+		Expect(d).To(HaveKeyWithValue("model", "claude-opus-4-8"))
+		Expect(d).To(HaveKeyWithValue("cost_usd", 0.02))
+	})
+
 	It("returns spend-vs-limit gauges at /api/limits", func() {
 		resp, err := http.Get(srv.URL + "/api/limits")
 		Expect(err).NotTo(HaveOccurred())
