@@ -139,5 +139,3 @@ enforcement:
       period: rolling
       window: 168h
       limit_usd: 1000
-
-# (test PR — safe to close, no functional change)
