@@ -133,8 +133,14 @@ const barColor = { ok: "var(--ok)", alerting: "var(--warn)", downgrading: "var(-
 let maxSpent = 0;
 
 async function loadOverview() {
-  let ov = { subjects: [], enforcement: {}, totals: {} };
-  try { const r = await fetch("/api/overview"); if (r.ok) ov = await r.json(); } catch (_) {}
+  let ov = null, failed = false;
+  try { const r = await fetch("/api/overview"); if (r.ok) { ov = await r.json(); } else { failed = true; } }
+  catch (_) { failed = true; }
+  if (failed) {
+    $("subjects").innerHTML = `<div class="empty">⚠ couldn't load overview — the gateway returned an error. Restart <code>inferenced ui</code> on the current build and check its log.</div>`;
+    return;
+  }
+  ov = ov || { subjects: [], enforcement: {}, totals: {} };
 
   const mode = ov.enforcement && ov.enforcement.enabled ? `enforcing (${esc(ov.enforcement.action)})` : "not enforcing";
   $("enf").innerHTML = `enforcement: <b>${mode}</b>` + (ov.downgrades && ov.downgrades.length ? ` · downgrade: <b>${esc(ov.downgrades.join(", "))}</b>` : "");

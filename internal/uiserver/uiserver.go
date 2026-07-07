@@ -56,6 +56,8 @@ func Handler(st Store, cfgPath string) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Never cache the shell, so a rebuilt gateway always serves fresh assets.
+		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(indexHTML)
 	})
 

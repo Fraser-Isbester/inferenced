@@ -1,6 +1,7 @@
 package uiserver
 
 import (
+	"log"
 	"sort"
 	"time"
 
@@ -74,9 +75,12 @@ func buildOverview(st Store, cfgPath string, now time.Time) (overviewResponse, e
 	}
 	resp.Totals.WindowDays = int(discoveryWindow / (24 * time.Hour))
 
+	// A stats query hiccup degrades to config-only subjects rather than blanking
+	// the whole panel (and its totals); config errors above are still fatal.
 	stats, err := st.SubjectStats(now.Add(-discoveryWindow))
 	if err != nil {
-		return resp, err
+		log.Printf("overview: subject stats: %v", err)
+		stats = nil
 	}
 
 	// Seed the subject set from active subjects, plus any concrete (non-wildcard)
