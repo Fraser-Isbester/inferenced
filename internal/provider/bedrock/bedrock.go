@@ -309,18 +309,27 @@ func (p *parser) Write(b []byte) (int, error) {
 // CRC checks stops decoding: framing is lost, and what was counted so far
 // stands.
 func (p *parser) drain() {
-	for len(p.buf) >= 12 {
-		total := binary.BigEndian.Uint32(p.buf[0:4])
-		hlen := binary.BigEndian.Uint32(p.buf[4:8])
+	off := 0
+	defer func() {
+		// Compact once per Write, not per frame: a Write carrying many frames
+		// would otherwise copy the remainder for each one.
+		if p.buf != nil && off > 0 {
+			p.buf = append([]byte(nil), p.buf[off:]...)
+		}
+	}()
+	for b := p.buf; len(b)-off >= 12; {
+		f := b[off:]
+		total := binary.BigEndian.Uint32(f[0:4])
+		hlen := binary.BigEndian.Uint32(f[4:8])
 		if total < 16 || total > maxFrame || hlen > total-16 ||
-			crc32.ChecksumIEEE(p.buf[0:8]) != binary.BigEndian.Uint32(p.buf[8:12]) {
+			crc32.ChecksumIEEE(f[0:8]) != binary.BigEndian.Uint32(f[8:12]) {
 			p.broken, p.buf = true, nil
 			return
 		}
-		if uint32(len(p.buf)) < total {
+		if uint32(len(f)) < total {
 			return
 		}
-		msg := p.buf[:total]
+		msg := f[:total]
 		if crc32.ChecksumIEEE(msg[:total-4]) != binary.BigEndian.Uint32(msg[total-4:]) {
 			p.broken, p.buf = true, nil
 			return
@@ -329,8 +338,7 @@ func (p *parser) drain() {
 		if headers[":message-type"] == "event" {
 			p.acc.fold(msg[12+hlen : total-4])
 		}
-		// Copy the remainder so the consumed frame's backing array can be freed.
-		p.buf = append([]byte(nil), p.buf[total:]...)
+		off += int(total)
 	}
 }
 

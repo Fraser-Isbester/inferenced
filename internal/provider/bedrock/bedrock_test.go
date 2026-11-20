@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -186,6 +187,14 @@ var _ = Describe("Bedrock provider", func() {
 				bedrocktest.Event("metadata", []byte(`{"usage":{"inputTokens":15,"outputTokens":10}}`)),
 			)
 			Expect(u).To(Equal(provider.Usage{InputTokens: 15, OutputTokens: 10}))
+		})
+
+		It("decodes many frames delivered in one write", func() {
+			var all []byte
+			for i := 1; i <= 500; i++ {
+				all = append(all, bedrocktest.Chunk(fmt.Sprintf(`{"generation":"x","prompt_token_count":3,"generation_token_count":%d}`, i))...)
+			}
+			Expect(feed(p.NewStreamParser("application/vnd.amazon.eventstream"), all)).To(Equal(provider.Usage{InputTokens: 3, OutputTokens: 500}))
 		})
 
 		It("decodes frames split across writes at any byte", func() {
