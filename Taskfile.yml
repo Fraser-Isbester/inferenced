@@ -32,7 +32,7 @@ tasks:
   test:
     desc: Run the Ginkgo test suites with the race detector
     cmds:
-      - go tool ginkgo -r --randomize-all --race
+      - go tool ginkgo -r --randomize-all --race --require-suite
 
   build:
     desc: Build the gateway binary into bin/
