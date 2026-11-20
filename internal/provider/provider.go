@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/Fraser-Isbester/inferenced/internal/artifact"
+	"github.com/Fraser-Isbester/inferenced/internal/identity"
 )
 
 // RequestInfo captures the metadata extracted from an inference request body.
@@ -115,6 +116,23 @@ type UpstreamRouter interface {
 // response Content-Type, to pick a parser.
 type RequestStreamParser interface {
 	NewStreamParserFor(r *http.Request, contentType string) StreamParser
+}
+
+// CredentialSource is an optional capability for providers whose upstream
+// authenticates a credential that identity.Credential's generic header order
+// would not pick (SigV4: the access key, whatever unsigned headers a client
+// adds). Its result keys the developer ID for metering and enforcement.
+type CredentialSource interface {
+	Credential(r *http.Request) string
+}
+
+// CredentialFor returns the credential that identifies r's caller, preferring
+// a provider's CredentialSource when it has one.
+func CredentialFor(p Provider, r *http.Request) string {
+	if cs, ok := p.(CredentialSource); ok {
+		return cs.Credential(r)
+	}
+	return identity.Credential(r)
 }
 
 // UpstreamHostFor resolves the upstream host for r, preferring a provider's

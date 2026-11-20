@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Fraser-Isbester/inferenced/internal/identity"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
 )
@@ -110,6 +111,15 @@ func (p bedrockProvider) UpstreamFor(r *http.Request) string {
 		return host
 	}
 	return p.UpstreamHost()
+}
+
+// Credential is the SigV4 access key: it is what AWS authenticates, while any
+// other credential header could be added unsigned to pick another identity.
+func (bedrockProvider) Credential(r *http.Request) string {
+	if akid, ok := identity.SigV4AccessKey(r.Header.Get("Authorization")); ok {
+		return akid
+	}
+	return identity.Credential(r)
 }
 
 // Matches never claims traffic; see the package comment.
@@ -387,6 +397,9 @@ type usage struct {
 	have    bool
 	final   bool
 	chars   int
+	// provisional: out so far is only Anthropic message_start's placeholder,
+	// so a stream cut there under-reports what was generated.
+	provisional bool
 }
 
 type counts struct {
@@ -462,14 +475,27 @@ func (u *usage) foldPayload(p payload) {
 	if u.final {
 		return
 	}
-	for _, c := range []*counts{p.Usage, messageUsage(p)} {
-		if c == nil {
-			continue
-		}
+	if c := messageUsage(p); c != nil {
+		before := u.out
 		u.set(max(c.InputTokens, c.InputSnake), max(c.OutputTokens, c.OutputSnake))
+		if u.out != before {
+			u.provisional = true
+		}
 	}
-	u.set(p.PromptTokens, p.GenTokens)
-	u.set(p.TitanIn, titanOut)
+	if c := p.Usage; c != nil {
+		u.setOut(max(c.InputTokens, c.InputSnake), max(c.OutputTokens, c.OutputSnake))
+	}
+	u.setOut(p.PromptTokens, p.GenTokens)
+	u.setOut(p.TitanIn, titanOut)
+}
+
+// setOut records counts whose output, when present, is reported rather than
+// a placeholder.
+func (u *usage) setOut(in, out int) {
+	u.set(in, out)
+	if out > 0 {
+		u.provisional = false
+	}
 }
 
 func messageUsage(p payload) *counts {
@@ -494,7 +520,7 @@ func (u *usage) result() provider.Usage {
 	if u.have {
 		// A stream cut before its final counts still produced the text seen
 		// so far; don't bill less than that.
-		if !u.final && u.chars/4 > u.out {
+		if u.provisional && u.chars/4 > u.out {
 			return provider.Usage{InputTokens: u.in, OutputTokens: u.chars / 4, Approximated: true}
 		}
 		return provider.Usage{InputTokens: u.in, OutputTokens: u.out}

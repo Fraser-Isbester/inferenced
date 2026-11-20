@@ -15,18 +15,17 @@ import (
 // (Anthropic), "Authorization: Bearer" (OpenAI and compatibles), "api-key"
 // (Azure OpenAI), "x-goog-api-key" (Gemini), then the "key" query parameter
 // (Gemini). A SigV4 Authorization (Bedrock) yields its access-key ID, since
-// the rest of the header changes with every request. It returns "" when none
+// the rest of the header changes with every request; a provider that must
+// rank it first implements provider.CredentialSource. It returns "" when none
 // is present (e.g. a local Ollama call).
 func Credential(r *http.Request) string {
-	// SigV4 first: the access key is what AWS authenticates, and any other
-	// header can be added unsigned to pick a different identity.
-	if akid, ok := sigV4AccessKey(r.Header.Get("Authorization")); ok {
-		return akid
-	}
 	if v := r.Header.Get("x-api-key"); v != "" {
 		return v
 	}
 	if v := r.Header.Get("Authorization"); v != "" {
+		if akid, ok := SigV4AccessKey(v); ok {
+			return akid
+		}
 		return strings.TrimSpace(strings.TrimPrefix(v, "Bearer "))
 	}
 	if v := r.Header.Get("api-key"); v != "" {
@@ -43,9 +42,9 @@ func Credential(r *http.Request) string {
 	return ""
 }
 
-// sigV4AccessKey returns the access-key ID from an
+// SigV4AccessKey returns the access-key ID from an
 // "AWS4-HMAC-SHA256 Credential=AKID/date/region/service/aws4_request, ..." value.
-func sigV4AccessKey(auth string) (string, bool) {
+func SigV4AccessKey(auth string) (string, bool) {
 	rest, ok := strings.CutPrefix(auth, "AWS4-HMAC-SHA256 ")
 	if !ok {
 		return "", false
@@ -70,16 +69,6 @@ func DeveloperID(credential string) string {
 	}
 	sum := sha256.Sum256([]byte(credential))
 	return hex.EncodeToString(sum[:])[:12]
-}
-
-// Resolve determines the developer and team attribution for a request. devID is
-// overrideID when non-empty, otherwise the anonymized id derived from the
-// request credential; teamOut is the given team unchanged.
-func Resolve(r *http.Request, overrideID, team string) (devID, teamOut string) {
-	if overrideID != "" {
-		return overrideID, team
-	}
-	return DeveloperID(Credential(r)), team
 }
 
 // Client returns a friendly name for the coding agent / client that made the

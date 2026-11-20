@@ -89,6 +89,17 @@ var _ = Describe("Bedrock provider", func() {
 		})
 	})
 
+	It("identifies a caller by the SigV4 access key, whatever unsigned headers it adds", func() {
+		r := signed("/model/x/invoke", "")
+		r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261120/us-west-2/bedrock/aws4_request, "+
+			"SignedHeaders=host;x-amz-date, Signature=aaaa")
+		r.Header.Set("x-api-key", "chosen-by-the-client")
+		cs, ok := p.(provider.CredentialSource)
+		Expect(ok).To(BeTrue())
+		Expect(cs.Credential(r)).To(Equal("AKIDEXAMPLE"))
+		Expect(provider.CredentialFor(p, r)).To(Equal("AKIDEXAMPLE"))
+	})
+
 	Describe("ParseRequest", func() {
 		It("reads the model from the path and the Anthropic body's estimate", func() {
 			info := p.ParseRequest(signed("/model/"+claudeID+"/invoke-with-response-stream", claudeBody), []byte(claudeBody))
@@ -150,6 +161,14 @@ var _ = Describe("Bedrock provider", func() {
 				bedrocktest.Chunk(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"`+strings.Repeat("x", 40)+`"}}`),
 			)
 			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 10, Approximated: true}))
+		})
+
+		It("keeps a completed stream's reported output even below the text estimate", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Event("contentBlockDelta", []byte(`{"contentBlockIndex":0,"delta":{"text":"`+strings.Repeat("x", 60)+`"}}`)),
+				bedrocktest.Event("metadata", []byte(`{"usage":{"inputTokens":15,"outputTokens":10}}`)),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 15, OutputTokens: 10}))
 		})
 
 		It("decodes frames split across writes at any byte", func() {

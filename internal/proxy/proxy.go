@@ -125,7 +125,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 
 		info := p.ParseRequest(out, body)
 
-		cred := identity.Credential(out)
+		cred := provider.CredentialFor(p, out)
 		devID := opts.DeveloperID
 		if devID == "" {
 			devID = identity.DeveloperID(cred)
