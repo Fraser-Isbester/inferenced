@@ -95,8 +95,9 @@ func (bedrockProvider) MatchesHost(host string) bool {
 	return hostRe.MatchString(strings.ToLower(host))
 }
 
-// UpstreamFor forwards to the inbound host: the client signed for it, so any
-// other host would fail the signature.
+// UpstreamFor forwards to the inbound host exactly as received: the client
+// signed that value, port and case included, so any other would fail the
+// signature. Only the normalized form is validated.
 func (p bedrockProvider) UpstreamFor(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -105,8 +106,8 @@ func (p bedrockProvider) UpstreamFor(r *http.Request) string {
 	if host == "" && r.URL != nil {
 		host = r.URL.Host
 	}
-	if h := strings.ToLower(stripPort(host)); hostRe.MatchString(h) {
-		return h
+	if hostRe.MatchString(strings.ToLower(stripPort(host))) {
+		return host
 	}
 	return p.UpstreamHost()
 }

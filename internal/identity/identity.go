@@ -14,12 +14,17 @@ import (
 // auth locations used across providers in priority order: "x-api-key"
 // (Anthropic), "Authorization: Bearer" (OpenAI and compatibles), "api-key"
 // (Azure OpenAI), "x-goog-api-key" (Gemini), then the "key" query parameter
-// (Gemini). It returns "" when none is present (e.g. a local Ollama call).
+// (Gemini). A SigV4 Authorization (Bedrock) yields its access-key ID, since
+// the rest of the header changes with every request. It returns "" when none
+// is present (e.g. a local Ollama call).
 func Credential(r *http.Request) string {
 	if v := r.Header.Get("x-api-key"); v != "" {
 		return v
 	}
 	if v := r.Header.Get("Authorization"); v != "" {
+		if akid, ok := sigV4AccessKey(v); ok {
+			return akid
+		}
 		return strings.TrimSpace(strings.TrimPrefix(v, "Bearer "))
 	}
 	if v := r.Header.Get("api-key"); v != "" {
@@ -34,6 +39,24 @@ func Credential(r *http.Request) string {
 		}
 	}
 	return ""
+}
+
+// sigV4AccessKey returns the access-key ID from an
+// "AWS4-HMAC-SHA256 Credential=AKID/date/region/service/aws4_request, ..." value.
+func sigV4AccessKey(auth string) (string, bool) {
+	rest, ok := strings.CutPrefix(auth, "AWS4-HMAC-SHA256 ")
+	if !ok {
+		return "", false
+	}
+	for _, part := range strings.Split(rest, ",") {
+		scope, ok := strings.CutPrefix(strings.TrimSpace(part), "Credential=")
+		if !ok {
+			continue
+		}
+		akid, _, _ := strings.Cut(scope, "/")
+		return akid, akid != ""
+	}
+	return "", false
 }
 
 // DeveloperID returns a stable, anonymized identifier for a credential. An empty

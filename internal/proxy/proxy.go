@@ -6,6 +6,7 @@ package proxy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -198,7 +199,9 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		go func() {
 			// Drain the tee'd bytes into the parser. io.Copy returns when the
 			// writer closes pw (normal EOF) or the pipe is broken.
-			_, _ = io.Copy(parser, pr)
+			_, _ = io.Copy(parser, observed(pr, resp.Header.Get("Content-Encoding")))
+			// Drain whatever a failed decode left, or the client stalls on pw.
+			_, _ = io.Copy(io.Discard, pr)
 
 			u := parser.Finish()
 			// Prefer the parser's authoritative input count; otherwise keep the
@@ -309,6 +312,21 @@ func (t *teeBody) Close() error {
 	// Closing the writer signals EOF to the observer's io.Copy(parser, pr).
 	_ = t.pw.Close()
 	return err
+}
+
+// observed returns the observer's view of the response body. The Transport
+// decompresses only when it chose the encoding itself; a client-signed
+// Accept-Encoding (Bedrock) stays, so a gzip body arrives here compressed and
+// is decoded for the parser alone, leaving the client's bytes untouched.
+func observed(r io.Reader, contentEncoding string) io.Reader {
+	if !strings.EqualFold(strings.TrimSpace(contentEncoding), "gzip") {
+		return r
+	}
+	zr, err := gzip.NewReader(r)
+	if err != nil {
+		return r
+	}
+	return zr
 }
 
 // sigV4Signs reports whether h carries an AWS SigV4 Authorization whose

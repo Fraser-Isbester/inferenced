@@ -75,6 +75,12 @@ var _ = Describe("Bedrock provider", func() {
 			Expect(provider.UpstreamHostFor(p, signed("/model/x/invoke", ""))).To(Equal(host))
 		})
 
+		It("forwards the signed Host value verbatim, port and case included", func() {
+			r := signed("/model/x/invoke", "")
+			r.Host = "Bedrock-Runtime.us-west-2.amazonaws.com:443"
+			Expect(provider.UpstreamHostFor(p, r)).To(Equal("Bedrock-Runtime.us-west-2.amazonaws.com:443"))
+		})
+
 		It("falls back to the configured region, rejecting a malformed one", func() {
 			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/model/x/invoke", nil)
 			Expect(provider.UpstreamHostFor(bedrock.NewWithRegion("eu-west-1"), r)).To(Equal("bedrock-runtime.eu-west-1.amazonaws.com"))

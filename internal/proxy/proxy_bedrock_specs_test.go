@@ -2,6 +2,7 @@ package proxy_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,5 +107,54 @@ var _ = Describe("Proxy with AWS Bedrock (transparent interception)", func() {
 		Expect(ev.OutputTokens).To(Equal(5))
 		Expect(ev.TokensApproximated).To(BeFalse())
 		Expect(ev.CostUSD).To(BeNumerically(">", 0))
+	})
+	It("meters a gzip response when the client signed its own Accept-Encoding", func() {
+		var gz bytes.Buffer
+		zw := gzip.NewWriter(&gz)
+		_, err := zw.Write(stream)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zw.Close()).To(Succeed())
+		gzAuth := "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261120/us-west-2/bedrock/aws4_request, " +
+			"SignedHeaders=accept-encoding;host;x-amz-date, Signature=4567cdef"
+
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			Expect(r.Header.Get("Accept-Encoding")).To(Equal("gzip"))
+			w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(gz.Bytes())
+		}))
+		defer upstream.Close()
+		upURL, err := url.Parse(upstream.URL)
+		Expect(err).NotTo(HaveOccurred())
+
+		reg := provider.NewRegistry()
+		reg.Register(bedrock.New())
+		sink := &capturingSink{}
+		rp := proxy.New(reg, sink, proxy.Options{})
+		rp.Transport = &redirectTransport{target: upURL, base: http.DefaultTransport}
+		srv := httptest.NewServer(rp)
+		defer srv.Close()
+
+		req, err := http.NewRequest(http.MethodPost, srv.URL+path, bytes.NewBufferString(reqBody))
+		Expect(err).NotTo(HaveOccurred())
+		req.Host = bedrockHost
+		req.Header.Set("Authorization", gzAuth)
+		req.Header.Set("X-Amz-Date", "20261120T112233Z")
+		// Set explicitly, so the client hands back the compressed bytes as-is.
+		req.Header.Set("Accept-Encoding", "gzip")
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).NotTo(HaveOccurred())
+		got, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.Header.Get("Content-Encoding")).To(Equal("gzip"))
+		Expect(got).To(Equal(gz.Bytes()), "the client receives the upstream bytes untouched")
+
+		Eventually(func() bool { _, ok := sink.last(); return ok }).Should(BeTrue())
+		ev, _ := sink.last()
+		Expect(ev.InputTokens).To(Equal(10))
+		Expect(ev.OutputTokens).To(Equal(5))
+		Expect(ev.TokensApproximated).To(BeFalse())
 	})
 })
