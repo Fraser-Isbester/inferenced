@@ -21,11 +21,15 @@ const DefaultTTL = 24 * time.Hour
 
 // providerAlias maps a models.dev provider id to the inferenced provider name.
 // Only providers with a built-in inferenced provider are mapped; the rest of
-// the models.dev catalog is ignored. Google's catalog is inferenced's "gemini".
+// the models.dev catalog is ignored. Google's catalog is inferenced's "gemini";
+// both Vertex catalogs (Google's and Anthropic's models on Vertex) merge into
+// "vertex", since one provider serves both.
 var providerAlias = map[string]string{
-	"anthropic": "anthropic",
-	"openai":    "openai",
-	"google":    "gemini",
+	"anthropic":               "anthropic",
+	"openai":                  "openai",
+	"google":                  "gemini",
+	"google-vertex":           "vertex",
+	"google-vertex-anthropic": "vertex",
 }
 
 // modelsDevDoc is the subset of the models.dev api.json shape we consume.

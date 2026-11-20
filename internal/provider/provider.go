@@ -94,6 +94,49 @@ type Provider interface {
 	RewriteModel(r *http.Request, body []byte, newModel string) ([]byte, error)
 }
 
+// HostMatcher is an optional capability for providers whose traffic spans a
+// family of hosts rather than a fixed list (Vertex AI's per-region
+// "{region}-aiplatform.googleapis.com"). Detect consults it in the Host-first
+// phase alongside Hosts.
+type HostMatcher interface {
+	MatchesHost(host string) bool
+}
+
+// UpstreamRouter is an optional capability for providers whose upstream host
+// depends on the request (Vertex AI routes by the region in the URL path). An
+// empty result falls back to UpstreamHost. Implementations must only ever
+// return hosts they own: the result is dialed verbatim.
+type UpstreamRouter interface {
+	UpstreamFor(r *http.Request) string
+}
+
+// RequestStreamParser is an optional capability for providers that multiplex
+// several wire formats behind one host and so need the request, not just the
+// response Content-Type, to pick a parser.
+type RequestStreamParser interface {
+	NewStreamParserFor(r *http.Request, contentType string) StreamParser
+}
+
+// UpstreamHostFor resolves the upstream host for r, preferring a provider's
+// UpstreamRouter when it has one.
+func UpstreamHostFor(p Provider, r *http.Request) string {
+	if ur, ok := p.(UpstreamRouter); ok {
+		if h := ur.UpstreamFor(r); h != "" {
+			return h
+		}
+	}
+	return p.UpstreamHost()
+}
+
+// StreamParserFor returns the response parser for r, preferring a provider's
+// RequestStreamParser when it has one.
+func StreamParserFor(p Provider, r *http.Request, contentType string) StreamParser {
+	if rp, ok := p.(RequestStreamParser); ok && r != nil {
+		return rp.NewStreamParserFor(r, contentType)
+	}
+	return p.NewStreamParser(contentType)
+}
+
 // RewriteBodyModel returns a copy of a JSON request body with its top-level
 // "model" field set to newModel, preserving every other field. It is the shared
 // implementation for body-based providers (Anthropic, OpenAI-wire, Ollama). On a
@@ -146,8 +189,8 @@ func (r *Registry) Names() []string {
 }
 
 // Detect resolves the provider for a request. It first tries Host-first
-// detection: if the request Host matches any provider's Hosts, that provider is
-// returned. Otherwise it returns the first provider whose Matches reports true.
+// detection: if the request Host matches any provider's Hosts (or its
+// HostMatcher), that provider is returned. Otherwise it returns the first provider whose Matches reports true.
 // If neither succeeds it returns (nil, false).
 func (r *Registry) Detect(req *http.Request) (Provider, bool) {
 	host := req.Host
@@ -161,6 +204,9 @@ func (r *Registry) Detect(req *http.Request) (Provider, bool) {
 			if strings.EqualFold(host, h) {
 				return p, true
 			}
+		}
+		if hm, ok := p.(HostMatcher); ok && hm.MatchesHost(host) {
+			return p, true
 		}
 	}
 

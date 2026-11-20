@@ -19,6 +19,12 @@ providers:
   anthropic: { enabled: true }
   openai: { enabled: true }
   gemini: { enabled: true }
+  # Vertex AI. Requests go to the region in their URL path
+  # ({region}-aiplatform.googleapis.com); set host to pin one endpoint instead,
+  # e.g. a Private Service Connect address.
+  vertex:
+    enabled: true
+    host: ""
   ollama:
     enabled: true
     upstream: "localhost:11434"   # local Ollama address (plain HTTP)
