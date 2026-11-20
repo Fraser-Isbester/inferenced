@@ -81,6 +81,14 @@ var _ = Describe("Credential", func() {
 		Expect(identity.Credential(b)).To(Equal(identity.Credential(a)))
 	})
 
+	It("keys a SigV4 request by its access key even when an unsigned x-api-key is added", func() {
+		r := httptest.NewRequest("POST", "/model/x/invoke", nil)
+		r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261120/us-east-1/bedrock/aws4_request, "+
+			"SignedHeaders=host;x-amz-date, Signature=aaaa")
+		r.Header.Set("x-api-key", "chosen-by-the-client")
+		Expect(identity.Credential(r)).To(Equal("AKIDEXAMPLE"))
+	})
+
 	It("returns empty when no credential is present", func() {
 		r := httptest.NewRequest("POST", "/api/chat", nil)
 		Expect(identity.Credential(r)).To(BeEmpty())

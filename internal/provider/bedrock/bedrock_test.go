@@ -144,6 +144,14 @@ var _ = Describe("Bedrock provider", func() {
 			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 9}))
 		})
 
+		It("approximates output from streamed text when a stream is cut before its final counts", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":1}}}`),
+				bedrocktest.Chunk(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"`+strings.Repeat("x", 40)+`"}}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 10, Approximated: true}))
+		})
+
 		It("decodes frames split across writes at any byte", func() {
 			all := append(bedrocktest.Chunk(`{"type":"message_start","message":{"usage":{"input_tokens":7}}}`),
 				bedrocktest.Chunk(`{"type":"message_stop","amazon-bedrock-invocationMetrics":{"inputTokenCount":7,"outputTokenCount":3}}`)...)

@@ -18,13 +18,15 @@ import (
 // the rest of the header changes with every request. It returns "" when none
 // is present (e.g. a local Ollama call).
 func Credential(r *http.Request) string {
+	// SigV4 first: the access key is what AWS authenticates, and any other
+	// header can be added unsigned to pick a different identity.
+	if akid, ok := sigV4AccessKey(r.Header.Get("Authorization")); ok {
+		return akid
+	}
 	if v := r.Header.Get("x-api-key"); v != "" {
 		return v
 	}
 	if v := r.Header.Get("Authorization"); v != "" {
-		if akid, ok := sigV4AccessKey(v); ok {
-			return akid
-		}
 		return strings.TrimSpace(strings.TrimPrefix(v, "Bearer "))
 	}
 	if v := r.Header.Get("api-key"); v != "" {

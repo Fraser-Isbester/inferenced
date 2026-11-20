@@ -492,6 +492,11 @@ func (u *usage) set(in, out int) {
 
 func (u *usage) result() provider.Usage {
 	if u.have {
+		// A stream cut before its final counts still produced the text seen
+		// so far; don't bill less than that.
+		if !u.final && u.chars/4 > u.out {
+			return provider.Usage{InputTokens: u.in, OutputTokens: u.chars / 4, Approximated: true}
+		}
 		return provider.Usage{InputTokens: u.in, OutputTokens: u.out}
 	}
 	return provider.Usage{OutputTokens: u.chars / 4, Approximated: true}
