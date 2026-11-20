@@ -150,6 +150,38 @@ var _ = Describe("Bedrock provider", func() {
 			Expect(u).To(Equal(provider.Usage{InputTokens: 15, OutputTokens: 6}))
 		})
 
+		It("unwraps a native Nova InvokeModel stream's metadata usage", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"messageStart":{"role":"assistant"}}`),
+				bedrocktest.Chunk(`{"contentBlockDelta":{"delta":{"text":"hello"},"contentBlockIndex":0}}`),
+				bedrocktest.Chunk(`{"metadata":{"usage":{"inputTokens":14,"outputTokens":5}}}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 14, OutputTokens: 5}))
+		})
+
+		It("keeps invocation metrics ahead of a native Nova stream's own counts", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"metadata":{"usage":{"inputTokens":14,"outputTokens":5}},"amazon-bedrock-invocationMetrics":{"inputTokenCount":15,"outputTokenCount":6}}`),
+				bedrocktest.Chunk(`{"metadata":{"usage":{"inputTokens":99,"outputTokens":99}}}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 15, OutputTokens: 6}))
+		})
+
+		It("approximates a native Nova stream from its text when it carries no counts", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"contentBlockDelta":{"delta":{"text":"abcdefgh"},"contentBlockIndex":0}}`),
+			)
+			Expect(u).To(Equal(provider.Usage{OutputTokens: 2, Approximated: true}))
+		})
+
+		It("reads a Titan stream's running counts", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"outputText":"hi","index":0,"totalOutputTextTokenCount":2,"inputTextTokenCount":9}`),
+				bedrocktest.Chunk(`{"outputText":" there","index":0,"totalOutputTextTokenCount":4,"completionReason":"FINISH"}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 9, OutputTokens: 4}))
+		})
+
 		It("stops at a corrupt frame and approximates from what it decoded", func() {
 			good := bedrocktest.Chunk(`{"type":"content_block_delta","delta":{"text":"abcdefgh"}}`)
 			bad := bedrocktest.Chunk(`{"type":"message_stop","amazon-bedrock-invocationMetrics":{"inputTokenCount":1,"outputTokenCount":1}}`)
@@ -168,6 +200,8 @@ var _ = Describe("Bedrock provider", func() {
 				provider.Usage{InputTokens: 8, OutputTokens: 2}),
 			Entry("InvokeModel, Llama", `{"generation":"hi","prompt_token_count":11,"generation_token_count":3}`,
 				provider.Usage{InputTokens: 11, OutputTokens: 3}),
+			Entry("InvokeModel, Titan", `{"inputTextTokenCount":9,"results":[{"tokenCount":4,"outputText":"hi","completionReason":"FINISH"},{"tokenCount":3,"outputText":"yo"}]}`,
+				provider.Usage{InputTokens: 9, OutputTokens: 7}),
 			Entry("unrecognized", `{"completion":"abcdefgh"}`, provider.Usage{Approximated: true}),
 		)
 	})

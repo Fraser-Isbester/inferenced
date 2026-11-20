@@ -397,6 +397,18 @@ type payload struct {
 		Text string `json:"text"`
 	} `json:"delta"` // Anthropic content_block_delta, Converse contentBlockDelta
 	Generation string `json:"generation"` // Llama
+	// Native Nova InvokeModel streams wrap Converse-shaped events.
+	ContentBlockDelta *payload `json:"contentBlockDelta"`
+	Metadata          *payload `json:"metadata"`
+	// Titan Text: inputTextTokenCount on the response or first chunk; output
+	// as per-result counts (non-stream) or a running total (stream).
+	TitanIn      int `json:"inputTextTokenCount"`
+	TitanOutRun  int `json:"totalOutputTextTokenCount"`
+	TitanResults []struct {
+		TokenCount int    `json:"tokenCount"`
+		OutputText string `json:"outputText"`
+	} `json:"results"`
+	OutputText string `json:"outputText"` // Titan stream
 }
 
 func (u *usage) fold(b []byte) {
@@ -404,13 +416,27 @@ func (u *usage) fold(b []byte) {
 	if json.Unmarshal(bytes.TrimSpace(b), &p) != nil {
 		return
 	}
+	u.foldPayload(p)
+}
+
+func (u *usage) foldPayload(p payload) {
 	if len(p.Bytes) > 0 {
 		u.fold(p.Bytes)
+	}
+	for _, w := range []*payload{p.ContentBlockDelta, p.Metadata} {
+		if w != nil {
+			u.foldPayload(*w)
+		}
 	}
 	if p.Delta != nil {
 		u.chars += len(p.Delta.Text)
 	}
-	u.chars += len(p.Generation)
+	u.chars += len(p.Generation) + len(p.OutputText)
+	titanOut := p.TitanOutRun
+	for _, r := range p.TitanResults {
+		titanOut += r.TokenCount
+		u.chars += len(r.OutputText)
+	}
 	if m := p.Metrics; m != nil {
 		u.in, u.out, u.have, u.final = m.In, m.Out, true, true
 		return
@@ -425,6 +451,7 @@ func (u *usage) fold(b []byte) {
 		u.set(max(c.InputTokens, c.InputSnake), max(c.OutputTokens, c.OutputSnake))
 	}
 	u.set(p.PromptTokens, p.GenTokens)
+	u.set(p.TitanIn, titanOut)
 }
 
 func messageUsage(p payload) *counts {
