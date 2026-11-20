@@ -199,6 +199,18 @@ var _ = Describe("Request-less parser fallback", func() {
 			Expect(sp.Finish()).To(Equal(want))
 		}
 	})
+
+	It("picks the authoritative wire from buffered JSON bodies", func() {
+		for body, want := range map[string]provider.Usage{
+			`{"type":"message","usage":{"input_tokens":20,"output_tokens":9}}`:                   {InputTokens: 20, OutputTokens: 9},
+			`{"candidates":[],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":7}}`: {InputTokens: 12, OutputTokens: 7},
+			`{"choices":[],"usage":{"prompt_tokens":30,"completion_tokens":4}}`:                  {InputTokens: 30, OutputTokens: 4},
+		} {
+			sp := vertex.New().NewStreamParser("application/json")
+			_, _ = io.Copy(sp, strings.NewReader(body))
+			Expect(sp.Finish()).To(Equal(want), body)
+		}
+	})
 })
 
 var _ = Describe("Price and errors", func() {

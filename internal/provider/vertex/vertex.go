@@ -310,8 +310,8 @@ func (nopParser) Write(b []byte) (int, error) { return len(b), nil }
 func (nopParser) Finish() provider.Usage      { return provider.Usage{Approximated: true} }
 
 // sniffParser tees into every wire parser and returns the first authoritative
-// usage. Anthropic is tried before OpenAI because openaiwire also accepts
-// input_tokens/output_tokens and would misread an Anthropic body.
+// usage with real counts. Anthropic is tried before OpenAI because openaiwire
+// also accepts input_tokens/output_tokens and would misread an Anthropic body.
 type sniffParser struct {
 	parsers []provider.StreamParser
 }
@@ -331,16 +331,30 @@ func (s *sniffParser) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// Finish prefers authoritative usage with real counts. A parser can report
+// authoritative zeros for a foreign body (anthropic accepts any "usage" object
+// and finds no input_tokens in an OpenAI one), so an authoritative zero only
+// wins when no parser counted anything.
 func (s *sniffParser) Finish() provider.Usage {
-	var fallback provider.Usage
+	var zero, fallback provider.Usage
+	haveZero := false
 	for i, p := range s.parsers {
 		u := p.Finish()
-		if !u.Approximated {
-			return u
-		}
 		if i == 0 {
 			fallback = u
 		}
+		if u.Approximated {
+			continue
+		}
+		if u.InputTokens > 0 || u.OutputTokens > 0 {
+			return u
+		}
+		if !haveZero {
+			zero, haveZero = u, true
+		}
+	}
+	if haveZero {
+		return zero
 	}
 	return fallback
 }
