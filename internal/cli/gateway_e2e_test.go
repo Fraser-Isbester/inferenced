@@ -227,8 +227,10 @@ var _ = Describe("gateway (serve wiring) end-to-end", func() {
 				_, _ = io.WriteString(w, c.respBody)
 			}
 
-			status, _, body := h.send(c.method, c.path, c.host, c.headers, c.reqBody)
+			status, hdr, body := h.send(c.method, c.path, c.host, c.headers, c.reqBody)
 			Expect(status).To(Equal(http.StatusOK))
+			Expect(hdr.Get("Content-Type")).To(Equal(c.respType),
+				"Content-Type must be forwarded; SSE/NDJSON clients dispatch on it")
 			Expect(body).To(Equal(c.respBody), "client must see upstream bytes verbatim")
 
 			calls := h.transport.snapshot()

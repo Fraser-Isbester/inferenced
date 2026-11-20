@@ -82,7 +82,11 @@ var _ = Describe("Proxy streaming invariants", func() {
 			}
 		}()
 
-		resp, err := http.DefaultClient.Do(messagesRequest(srv.URL))
+		// The timeout covers Do and every body read: a proxy that buffers before
+		// sending headers would otherwise block Do until release, hanging the
+		// suite instead of failing it.
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(messagesRequest(srv.URL))
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = resp.Body.Close() }()
 
@@ -117,15 +121,26 @@ var _ = Describe("Proxy streaming invariants", func() {
 
 	It("emits exactly one event when the client disconnects mid-stream", func() {
 		upstreamDone := make(chan struct{})
+		cancelled := make(chan struct{})
+		// teardown unblocks the handler independently of the behavior under test,
+		// so a cancel-propagation regression fails the spec instead of hanging
+		// httptest.Server.Close on an active handler.
+		teardown := make(chan struct{})
+		defer close(teardown)
 		srv, sink := startProxy(func(w http.ResponseWriter, r *http.Request) {
 			defer close(upstreamDone)
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, firstEvent)
 			w.(http.Flusher).Flush()
-			<-r.Context().Done() // upstream would stream forever; only a cancel ends it
+			select { // upstream would stream forever; only a cancel ends it
+			case <-r.Context().Done():
+				close(cancelled)
+			case <-teardown:
+			}
 		})
 
-		resp, err := http.DefaultClient.Do(messagesRequest(srv.URL))
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(messagesRequest(srv.URL))
 		Expect(err).NotTo(HaveOccurred())
 		buf := make([]byte, len(firstEvent))
 		_, err = io.ReadFull(resp.Body, buf)
@@ -133,6 +148,7 @@ var _ = Describe("Proxy streaming invariants", func() {
 		Expect(resp.Body.Close()).To(Succeed()) // client walks away
 
 		// The cancel must propagate upstream and unblock the observer goroutine.
+		Eventually(cancelled, 3*time.Second).Should(BeClosed())
 		Eventually(upstreamDone, 3*time.Second).Should(BeClosed())
 		Eventually(sink.count, 3*time.Second).Should(Equal(1))
 		Consistently(sink.count, 200*time.Millisecond).Should(Equal(1))
@@ -176,14 +192,20 @@ var _ = Describe("Proxy streaming invariants", func() {
 		sink.mu.Lock()
 		defer sink.mu.Unlock()
 		ids := map[string]bool{}
+		seen := map[int]bool{}
 		for _, ev := range sink.events {
 			Expect(ids[ev.RequestID]).To(BeFalse(), "request IDs must be unique")
 			ids[ev.RequestID] = true
 			var i int
 			_, err := fmt.Sscanf(ev.Model, "m-%d", &i)
 			Expect(err).NotTo(HaveOccurred())
+			Expect(i).To(BeNumerically(">=", 1))
+			Expect(i).To(BeNumerically("<=", n))
+			Expect(seen[i]).To(BeFalse(), "model %s emitted twice; another request's event was lost", ev.Model)
+			seen[i] = true
 			Expect(ev.InputTokens).To(Equal(i), "event for %s carries another request's usage", ev.Model)
 			Expect(ev.OutputTokens).To(Equal(2 * i))
 		}
+		Expect(seen).To(HaveLen(n), "every request must be represented exactly once")
 	})
 })
