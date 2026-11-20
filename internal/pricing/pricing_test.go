@@ -146,6 +146,12 @@ const modelsDevBody = `{
   "google": {"id":"google","models":{
     "gemini-2.5-pro":{"cost":{"input":1.25,"output":10}}
   }},
+  "google-vertex": {"id":"google-vertex","models":{
+    "gemini-2.5-flash":{"cost":{"input":0.3,"output":2.5}}
+  }},
+  "google-vertex-anthropic": {"id":"google-vertex-anthropic","models":{
+    "claude-sonnet-4-5@20250929":{"cost":{"input":3,"output":15}}
+  }},
   "cohere": {"id":"cohere","models":{
     "command-r":{"cost":{"input":1,"output":2}}
   }}
@@ -182,6 +188,14 @@ var _ = Describe("LoadRemote", func() {
 		// google -> gemini alias.
 		_, ok = sheet.Lookup("gemini", "gemini-2.5-pro")
 		Expect(ok).To(BeTrue())
+
+		// Both Vertex catalogs merge into the one vertex provider.
+		p, ok = sheet.Lookup("vertex", "gemini-2.5-flash")
+		Expect(ok).To(BeTrue())
+		Expect(p.OutputPer1M).To(Equal(2.5))
+		p, ok = sheet.Lookup("vertex", "claude-sonnet-4-5@20250929")
+		Expect(ok).To(BeTrue())
+		Expect(p.InputPer1M).To(Equal(3.0))
 
 		// cohere has no inferenced provider and is dropped.
 		_, ok = sheet.Lookup("cohere", "command-r")
