@@ -103,6 +103,13 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		if !sigV4Signs(out.Header, "accept-encoding") {
 			out.Header.Del("Accept-Encoding")
 		}
+		// Rewrite drops inbound X-Forwarded-* headers; restore any the client
+		// signed, or the signature fails.
+		for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+			if v, ok := pr.In.Header[h]; ok && sigV4Signs(out.Header, strings.ToLower(h)) {
+				out.Header[h] = v
+			}
+		}
 
 		// Read and restore the body so ParseRequest can inspect it while the
 		// forwarded request still carries a replayable body.

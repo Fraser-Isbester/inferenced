@@ -157,4 +157,36 @@ var _ = Describe("Proxy with AWS Bedrock (transparent interception)", func() {
 		Expect(ev.OutputTokens).To(Equal(5))
 		Expect(ev.TokensApproximated).To(BeFalse())
 	})
+	It("keeps X-Forwarded-For when the client signed it", func() {
+		fwdAuth := "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261120/us-west-2/bedrock/aws4_request, " +
+			"SignedHeaders=host;x-amz-date;x-forwarded-for, Signature=89abcdef"
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			Expect(r.Header.Values("X-Forwarded-For")).To(Equal([]string{"10.0.0.7"}))
+			w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+			_, _ = w.Write(stream)
+		}))
+		defer upstream.Close()
+		upURL, err := url.Parse(upstream.URL)
+		Expect(err).NotTo(HaveOccurred())
+
+		reg := provider.NewRegistry()
+		reg.Register(bedrock.New())
+		rp := proxy.New(reg, &capturingSink{}, proxy.Options{})
+		rp.Transport = &redirectTransport{target: upURL, base: http.DefaultTransport}
+		srv := httptest.NewServer(rp)
+		defer srv.Close()
+
+		req, err := http.NewRequest(http.MethodPost, srv.URL+path, bytes.NewBufferString(reqBody))
+		Expect(err).NotTo(HaveOccurred())
+		req.Host = bedrockHost
+		req.Header.Set("Authorization", fwdAuth)
+		req.Header.Set("X-Amz-Date", "20261120T112233Z")
+		req.Header.Set("X-Forwarded-For", "10.0.0.7")
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).NotTo(HaveOccurred())
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+	})
 })

@@ -432,7 +432,11 @@ type payload struct {
 	PromptTokens int `json:"prompt_token_count"`     // Llama
 	GenTokens    int `json:"generation_token_count"` // Llama, cumulative
 	Delta        *struct {
-		Text string `json:"text"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"` // Anthropic tool_use input
+		ToolUse     *struct {
+			Input string `json:"input"`
+		} `json:"toolUse"` // Converse tool_use input
 	} `json:"delta"` // Anthropic content_block_delta, Converse contentBlockDelta
 	Generation string `json:"generation"` // Llama
 	// Native Nova InvokeModel streams wrap Converse-shaped events.
@@ -468,7 +472,10 @@ func (u *usage) foldPayload(p payload) {
 		}
 	}
 	if p.Delta != nil {
-		u.chars += len(p.Delta.Text)
+		u.chars += len(p.Delta.Text) + len(p.Delta.PartialJSON)
+		if p.Delta.ToolUse != nil {
+			u.chars += len(p.Delta.ToolUse.Input)
+		}
 	}
 	u.chars += len(p.Generation) + len(p.OutputText) + len(p.Completion)
 	titanOut := p.TitanOutRun
