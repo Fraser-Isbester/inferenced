@@ -476,11 +476,8 @@ func (u *usage) foldPayload(p payload) {
 		return
 	}
 	if c := messageUsage(p); c != nil {
-		before := u.out
 		u.set(max(c.InputTokens, c.InputSnake), max(c.OutputTokens, c.OutputSnake))
-		if u.out != before {
-			u.provisional = true
-		}
+		u.provisional = true
 	}
 	if c := p.Usage; c != nil {
 		u.setOut(max(c.InputTokens, c.InputSnake), max(c.OutputTokens, c.OutputSnake))
@@ -520,7 +517,7 @@ func (u *usage) result() provider.Usage {
 	if u.have {
 		// A stream cut before its final counts still produced the text seen
 		// so far; don't bill less than that.
-		if u.provisional && u.chars/4 > u.out {
+		if u.provisional && !u.final && u.chars/4 > u.out {
 			return provider.Usage{InputTokens: u.in, OutputTokens: u.chars / 4, Approximated: true}
 		}
 		return provider.Usage{InputTokens: u.in, OutputTokens: u.out}

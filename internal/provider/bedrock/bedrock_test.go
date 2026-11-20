@@ -163,6 +163,23 @@ var _ = Describe("Bedrock provider", func() {
 			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 10, Approximated: true}))
 		})
 
+		It("keeps invocation metrics even below the text estimate after a message_start", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":1}}}`),
+				bedrocktest.Chunk(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"`+strings.Repeat("x", 60)+`"}}`),
+				bedrocktest.Chunk(`{"type":"message_stop","amazon-bedrock-invocationMetrics":{"inputTokenCount":20,"outputTokenCount":10}}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 10}))
+		})
+
+		It("approximates a cut stream whose message_start reported no output", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"type":"message_start","message":{"usage":{"input_tokens":20}}}`),
+				bedrocktest.Chunk(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"`+strings.Repeat("x", 40)+`"}}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 10, Approximated: true}))
+		})
+
 		It("keeps a completed stream's reported output even below the text estimate", func() {
 			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
 				bedrocktest.Event("contentBlockDelta", []byte(`{"contentBlockIndex":0,"delta":{"text":"`+strings.Repeat("x", 60)+`"}}`)),
