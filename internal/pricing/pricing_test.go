@@ -152,6 +152,9 @@ const modelsDevBody = `{
   "google-vertex-anthropic": {"id":"google-vertex-anthropic","models":{
     "claude-sonnet-4-5@20250929":{"cost":{"input":3,"output":15}}
   }},
+  "amazon-bedrock": {"id":"amazon-bedrock","models":{
+    "anthropic.claude-haiku-4-5-20251001-v1:0":{"cost":{"input":1,"output":5}}
+  }},
   "cohere": {"id":"cohere","models":{
     "command-r":{"cost":{"input":1,"output":2}}
   }}
@@ -196,6 +199,12 @@ var _ = Describe("LoadRemote", func() {
 		p, ok = sheet.Lookup("vertex", "claude-sonnet-4-5@20250929")
 		Expect(ok).To(BeTrue())
 		Expect(p.InputPer1M).To(Equal(3.0))
+
+		// amazon-bedrock -> bedrock, and a cross-region profile id ("us." prefix)
+		// still finds the catalog's base id as a substring.
+		p, ok = sheet.Lookup("bedrock", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+		Expect(ok).To(BeTrue())
+		Expect(p.OutputPer1M).To(Equal(5.0))
 
 		// cohere has no inferenced provider and is dropped.
 		_, ok = sheet.Lookup("cohere", "command-r")

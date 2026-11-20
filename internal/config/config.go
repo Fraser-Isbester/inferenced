@@ -20,6 +20,7 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/enforce"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
+	"github.com/Fraser-Isbester/inferenced/internal/provider/bedrock"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/gemini"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/ollama"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/openai"
@@ -152,11 +153,12 @@ type Developer struct {
 
 // Providers toggles built-in providers and defines OpenAI-compatible endpoints.
 type Providers struct {
-	Anthropic Toggle       `yaml:"anthropic"`
-	OpenAI    Toggle       `yaml:"openai"`
-	Gemini    Toggle       `yaml:"gemini"`
-	Vertex    VertexToggle `yaml:"vertex"`
-	Ollama    OllamaToggle `yaml:"ollama"`
+	Anthropic Toggle        `yaml:"anthropic"`
+	OpenAI    Toggle        `yaml:"openai"`
+	Gemini    Toggle        `yaml:"gemini"`
+	Vertex    VertexToggle  `yaml:"vertex"`
+	Bedrock   BedrockToggle `yaml:"bedrock"`
+	Ollama    OllamaToggle  `yaml:"ollama"`
 
 	OpenAICompatible []CompatEntry `yaml:"openai_compatible"`
 }
@@ -178,6 +180,14 @@ type OllamaToggle struct {
 type VertexToggle struct {
 	Enabled *bool  `yaml:"enabled"`
 	Host    string `yaml:"host"`
+}
+
+// BedrockToggle is a Toggle plus the region used when a request's own host
+// doesn't name one. Bedrock is metered only under transparent interception;
+// see the bedrock package.
+type BedrockToggle struct {
+	Enabled *bool  `yaml:"enabled"`
+	Region  string `yaml:"region"`
 }
 
 // CompatEntry defines one OpenAI-compatible endpoint.
@@ -271,6 +281,9 @@ func (c *Config) Registry() *provider.Registry {
 	// would otherwise claim Vertex paths in env-override mode.
 	if enabled(c.Providers.Vertex.Enabled) {
 		reg.Register(vertex.NewWithHost(c.Providers.Vertex.Host))
+	}
+	if enabled(c.Providers.Bedrock.Enabled) {
+		reg.Register(bedrock.NewWithRegion(c.Providers.Bedrock.Region))
 	}
 	if enabled(c.Providers.Anthropic.Enabled) {
 		reg.Register(anthropic.New())

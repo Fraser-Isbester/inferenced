@@ -18,6 +18,7 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/identity"
 	"github.com/Fraser-Isbester/inferenced/internal/otelexport"
 	"github.com/Fraser-Isbester/inferenced/internal/pricing"
+	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/proxy"
 	"github.com/Fraser-Isbester/inferenced/internal/store"
 	"github.com/Fraser-Isbester/inferenced/internal/telemetry"
@@ -128,7 +129,15 @@ func runServe(configPath, port string) {
 		log.Printf("enforcement is enabled but storage is off; spend can't be measured (no-op) — enable storage")
 	}
 	resolve := func(r *http.Request) (string, string) {
-		return identity.Resolve(r, cfg.Developer.ID, team)
+		if cfg.Developer.ID != "" {
+			return cfg.Developer.ID, team
+		}
+		// The same credential the proxy meters by, so limits match the ledger.
+		cred := identity.Credential(r)
+		if p, ok := reg.Detect(r); ok {
+			cred = provider.CredentialFor(p, r)
+		}
+		return identity.DeveloperID(cred), team
 	}
 
 	initial, err := buildRuleset(cfg, spendFn)
