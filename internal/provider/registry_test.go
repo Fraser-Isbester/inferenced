@@ -9,10 +9,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
-	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
-	"github.com/Fraser-Isbester/inferenced/internal/provider/gemini"
-	"github.com/Fraser-Isbester/inferenced/internal/provider/ollama"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/openai"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/openaicompat"
 )
@@ -112,12 +110,9 @@ var _ = Describe("built-in registry routing (env-override mode)", func() {
 	var reg *provider.Registry
 
 	BeforeEach(func() {
-		// Same order as config.Registry.
-		reg = provider.NewRegistry()
-		reg.Register(anthropic.New())
-		reg.Register(openai.New())
-		reg.Register(gemini.New())
-		reg.Register(ollama.New())
+		// The real config-built registry, so registration-order changes there
+		// (which decide every heuristic tie) are caught here.
+		reg = config.Default().Registry()
 	})
 
 	DescribeTable("routes each documented endpoint to its provider",
@@ -139,6 +134,8 @@ var _ = Describe("built-in registry routing (env-override mode)", func() {
 		Entry("gemini streamGenerateContent", "/v1beta/models/gemini-2.0-flash:streamGenerateContent", nil, "gemini"),
 		Entry("gemini by api-key header", "/v1beta/whatever",
 			map[string]string{"x-goog-api-key": "k"}, "gemini"),
+		Entry("vertex gemini", "/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent", nil, "vertex"),
+		Entry("vertex claude", "/v1/projects/p1/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929:streamRawPredict", nil, "vertex"),
 		Entry("ollama chat", "/api/chat", nil, "ollama"),
 		Entry("ollama generate", "/api/generate", nil, "ollama"),
 		Entry("unknown path", "/healthz", nil, ""),

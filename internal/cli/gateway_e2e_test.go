@@ -85,6 +85,7 @@ func unitSheet() *pricing.Resolver {
 		"openai":    {"default": p},
 		"gemini":    {"default": p},
 		"groq":      {"default": p},
+		"vertex":    {"default": p},
 	}))
 }
 
@@ -298,6 +299,16 @@ var _ = Describe("gateway (serve wiring) end-to-end", func() {
 			wantIn: 6, wantOut: 2, wantCost: 6 + 2*2,
 			credential: "AIza-e2e-secret",
 		}),
+		Entry("vertex gemini (region routed from the path)", providerCase{
+			method: http.MethodPost, path: "/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+			headers:  map[string]string{"Authorization": "Bearer ya29.vertex-e2e-secret", "Content-Type": "application/json"},
+			reqBody:  `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
+			respType: "text/event-stream", respBody: geminiSSE,
+			wantURL:      "https://us-central1-aiplatform.googleapis.com/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+			wantProvider: "vertex", wantModel: "gemini-2.0-flash",
+			wantIn: 6, wantOut: 2, wantCost: 6 + 2*2,
+			credential: "ya29.vertex-e2e-secret",
+		}),
 		Entry("ollama chat (NDJSON over plain HTTP, $0)", providerCase{
 			method: http.MethodPost, path: "/api/chat",
 			headers:  map[string]string{"Authorization": "Bearer ollama-e2e-secret", "Content-Type": "application/json"},
@@ -321,14 +332,22 @@ var _ = Describe("gateway (serve wiring) end-to-end", func() {
 	)
 
 	It("rejects undetected traffic with a 404 without dialing upstream or writing the ledger", func() {
+		// Enforcement is live and every caller is over budget, so a 402 here
+		// would mean Gate no longer runs outermost.
+		cfg.Enforcement = config.Enforcement{
+			Enabled: true,
+			Limits:  []config.LimitYAML{{Scope: "developer", ID: "*", Period: "day", LimitUSD: 1}},
+		}
 		h := newGatewayHarness(cfg)
 		h.respond = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+		h.st.Emit(telemetry.Event{RequestID: "seed", TimestampUnixMs: time.Now().UnixMilli(), Status: 200, CostUSD: 5})
+		h.rows(1)
 
 		status, _, body := h.send(http.MethodGet, "/healthz", "", nil, "")
 		Expect(status).To(Equal(http.StatusNotFound))
 		Expect(body).To(ContainSubstring("no provider matched"))
 		Expect(h.transport.snapshot()).To(BeEmpty())
-		Expect(h.rows(0)).To(BeEmpty())
+		Expect(h.rows(1)).To(HaveLen(1), "only the seed row; the rejected request is not metered")
 	})
 
 	It("does not route traffic to a provider disabled in config", func() {
