@@ -144,7 +144,11 @@ func routeOf(r *http.Request) (route, bool) {
 // ParseRequest reads the model from the path. InvokeModel bodies for Claude are
 // Anthropic Messages, so they get the Anthropic parser's estimate and metadata.
 func (bedrockProvider) ParseRequest(r *http.Request, body []byte) provider.RequestInfo {
-	rt, _ := routeOf(r)
+	rt, ok := routeOf(r)
+	if !ok {
+		// Not an inference call (count-tokens, say): nothing billable.
+		return provider.RequestInfo{}
+	}
 	info := provider.RequestInfo{Model: rt.model, Stream: strings.HasSuffix(rt.op, "stream")}
 	switch {
 	case strings.HasPrefix(rt.op, "converse"):
@@ -152,12 +156,25 @@ func (bedrockProvider) ParseRequest(r *http.Request, body []byte) provider.Reque
 	case strings.Contains(strings.ToLower(rt.model), "anthropic.") || strings.Contains(strings.ToLower(rt.model), "claude"):
 		ai := anthropicP.ParseRequest(r, body)
 		info.ApproxInputTokens = ai.ApproxInputTokens
+		if info.ApproxInputTokens == 0 {
+			// Legacy Claude Text Completions carry a "prompt", not messages.
+			info.ApproxInputTokens = promptLen(body) / 4
+		}
 		info.Metadata = ai.Metadata
 		info.Artifacts = ai.Artifacts
 	default:
 		info.ApproxInputTokens = len(body) / 4
 	}
 	return info
+}
+
+// promptLen is the length of a Text Completions request's prompt.
+func promptLen(body []byte) int {
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	_ = json.Unmarshal(body, &req)
+	return len(req.Prompt)
 }
 
 // converseTextLen sums the text of a Converse request's system and messages.
@@ -409,6 +426,7 @@ type payload struct {
 		OutputText string `json:"outputText"`
 	} `json:"results"`
 	OutputText string `json:"outputText"` // Titan stream
+	Completion string `json:"completion"` // Claude Text Completions
 }
 
 func (u *usage) fold(b []byte) {
@@ -431,7 +449,7 @@ func (u *usage) foldPayload(p payload) {
 	if p.Delta != nil {
 		u.chars += len(p.Delta.Text)
 	}
-	u.chars += len(p.Generation) + len(p.OutputText)
+	u.chars += len(p.Generation) + len(p.OutputText) + len(p.Completion)
 	titanOut := p.TitanOutRun
 	for _, r := range p.TitanResults {
 		titanOut += r.TokenCount

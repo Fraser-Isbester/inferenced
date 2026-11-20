@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -109,6 +110,19 @@ var _ = Describe("Bedrock provider", func() {
 			Expect(info.Stream).To(BeFalse())
 			Expect(info.ApproxInputTokens).To(Equal((len("be brief") + len("hello world, twelve")) / 4))
 		})
+
+		It("gives a non-inference route, such as count-tokens, no billable estimate", func() {
+			body := `{"input":{"invokeModel":{"body":"` + strings.Repeat("x", 400) + `"}}}`
+			info := p.ParseRequest(signed("/model/"+claudeID+"/count-tokens", body), []byte(body))
+			Expect(info).To(Equal(provider.RequestInfo{}))
+		})
+
+		It("estimates a Claude Text Completions request from its prompt", func() {
+			prompt := `\n\nHuman: summarize the quarterly report please\n\nAssistant:` // JSON-escaped
+			body := `{"prompt":"` + prompt + `","max_tokens_to_sample":200}`
+			info := p.ParseRequest(signed("/model/anthropic.claude-v2:1/invoke", body), []byte(body))
+			Expect(info.ApproxInputTokens).To(BeNumerically(">", 0))
+		})
 	})
 
 	Describe("metering", func() {
@@ -202,7 +216,9 @@ var _ = Describe("Bedrock provider", func() {
 				provider.Usage{InputTokens: 11, OutputTokens: 3}),
 			Entry("InvokeModel, Titan", `{"inputTextTokenCount":9,"results":[{"tokenCount":4,"outputText":"hi","completionReason":"FINISH"},{"tokenCount":3,"outputText":"yo"}]}`,
 				provider.Usage{InputTokens: 9, OutputTokens: 7}),
-			Entry("unrecognized", `{"completion":"abcdefgh"}`, provider.Usage{Approximated: true}),
+			Entry("InvokeModel, Claude Text Completions", `{"completion":"abcdefgh","stop_reason":"stop_sequence"}`,
+				provider.Usage{OutputTokens: 2, Approximated: true}),
+			Entry("unrecognized", `{"answer":"abcdefgh"}`, provider.Usage{Approximated: true}),
 		)
 	})
 
