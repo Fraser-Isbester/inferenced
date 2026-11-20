@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -96,7 +97,11 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		// parser cannot read — yielding OutputTokens=0. Removing it lets the
 		// Transport advertise gzip and transparently decompress, so the observer
 		// (and the client) see plain text. Bandwidth is irrelevant on localhost.
-		out.Header.Del("Accept-Encoding")
+		// A SigV4-signed request (Bedrock) that signed the header keeps it, since
+		// removing a signed header fails the signature.
+		if !sigV4Signs(out.Header, "accept-encoding") {
+			out.Header.Del("Accept-Encoding")
+		}
 
 		// Read and restore the body so ParseRequest can inspect it while the
 		// forwarded request still carries a replayable body.
@@ -304,4 +309,25 @@ func (t *teeBody) Close() error {
 	// Closing the writer signals EOF to the observer's io.Copy(parser, pr).
 	_ = t.pw.Close()
 	return err
+}
+
+// sigV4Signs reports whether h carries an AWS SigV4 Authorization whose
+// SignedHeaders list includes name (lower-case).
+func sigV4Signs(h http.Header, name string) bool {
+	auth := h.Get("Authorization")
+	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 ") {
+		return false
+	}
+	for _, part := range strings.Split(auth[len("AWS4-HMAC-SHA256 "):], ",") {
+		list, ok := strings.CutPrefix(strings.TrimSpace(part), "SignedHeaders=")
+		if !ok {
+			continue
+		}
+		for _, hdr := range strings.Split(list, ";") {
+			if hdr == name {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -25,6 +25,11 @@ providers:
   vertex:
     enabled: true
     host: ""
+  # AWS Bedrock, metering only. Detected by host under transparent interception;
+  # each request goes to the host it was signed for. region is the fallback.
+  bedrock:
+    enabled: true
+    region: us-east-1
   ollama:
     enabled: true
     upstream: "localhost:11434"   # local Ollama address (plain HTTP)

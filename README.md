@@ -83,6 +83,8 @@ Claude Code on Vertex AI (`CLAUDE_CODE_USE_VERTEX=1`) works the same way; the ga
 export ANTHROPIC_VERTEX_BASE_URL="http://127.0.0.1:8766/v1"
 ```
 
+AWS Bedrock can't be routed this way. Requests are SigV4-signed for the host the SDK is pointed at, so a request signed for the gateway fails AWS's signature check once forwarded. Bedrock is metered only when the client still signs for `bedrock-runtime.{region}.amazonaws.com` and the gateway receives that traffic transparently. The gateway then forwards each request byte-for-byte to the host it was signed for, and never rewrites it: downgrade rules pass Bedrock requests through unchanged, while block still applies.
+
 Or any OpenAI-compatible client:
 
 ```bash
@@ -107,7 +109,7 @@ The gateway prints a lifecycle line per request:
 | Google Gemini | ✅ | `generateContent`/`streamGenerateContent`, `usageMetadata` |
 | Google Vertex AI | ✅ | Gemini (`generateContent`), Claude (`rawPredict`), OpenAI-wire MaaS; routed by the region in the path; ADC bearer tokens pass through untouched |
 | Ollama (local) | ✅ | `/api/chat`, `/api/generate` (NDJSON), `$0` cost |
-| AWS Bedrock | 🔜 | needs SigV4 handling |
+| AWS Bedrock | ✅ (metering only) | InvokeModel and Converse, streamed (AWS event-stream) or not; detected by host under transparent interception only, see below |
 
 Built-in providers are a single file implementing the `Provider` interface plus a registry entry. Any endpoint that speaks the **OpenAI wire format** needs no code at all — add it under `providers.openai_compatible` in the config (see below). Browser-based inference (e.g. chatgpt.com) is out of scope.
 
@@ -188,9 +190,9 @@ enforcement:
 - **Period** is `day`, `month`, or `rolling`. `day` and `month` reset at the local calendar boundary; `rolling` sums spend over a trailing `window` (any Go duration, e.g. `168h`) and is **required** for rolling limits.
 - `limit_usd` is the reference budget. **Thresholds are fractions of it and fully per-limit**, so the policy is rule-based: `downgrade_at` (e.g. `0.8`) is where the model is down-scoped, `block_at` (e.g. `1.2`, default `1.0`) is where the request is blocked. Omitting `downgrade_at` means the limit only ever blocks.
 
-**Downgrade** (model failover): when a limit crosses `downgrade_at` (but is still under `block_at`), inferenced rewrites the request's model in-flight to the target of the first matching `downgrade` rule — the JSON `model` field for Anthropic/OpenAI/Ollama, or the URL path for Gemini and Vertex — and forwards it. The downgraded request is metered under the cheaper model. Block always wins over downgrade, and a rewrite that can't be applied (no matching rule, parse error) forwards the request unchanged rather than dropping it.
+**Downgrade** (model failover): when a limit crosses `downgrade_at` (but is still under `block_at`), inferenced rewrites the request's model in-flight to the target of the first matching `downgrade` rule — the JSON `model` field for Anthropic/OpenAI/Ollama, or the URL path for Gemini and Vertex — and forwards it. Bedrock requests are never rewritten, because that would break their SigV4 signature. The downgraded request is metered under the cheaper model. Block always wins over downgrade, and a rewrite that can't be applied (no matching rule, parse error) forwards the request unchanged rather than dropping it.
 
-**Block:** when a limit reaches `block_at` and `action: block`, the request is denied (never forwarded) with a **provider-shaped error envelope** so the calling client surfaces a native, non-retriable error. The status defaults to **402 Payment Required** (`block_status`), which coding agents read as a quota/billing stop — deliberately **not** 401/403 (Claude Code maps those to "run `/login`") or 429 (treated as retryable rate-limiting). The error type is mapped per provider for a 402 budget block (Anthropic `invalid_request_error`, OpenAI `insufficient_quota`, Gemini `FAILED_PRECONDITION`).
+**Block:** when a limit reaches `block_at` and `action: block`, the request is denied (never forwarded) with a **provider-shaped error envelope** so the calling client surfaces a native, non-retriable error. The status defaults to **402 Payment Required** (`block_status`), which coding agents read as a quota/billing stop — deliberately **not** 401/403 (Claude Code maps those to "run `/login`") or 429 (treated as retryable rate-limiting). The error type is mapped per provider for a 402 budget block (Anthropic `invalid_request_error`, OpenAI `insufficient_quota`, Gemini `FAILED_PRECONDITION`, Bedrock `AccessDeniedException`).
 
 With `action: warn`, nothing is enforced — every block/downgrade intent is logged (`[LIMIT] warn …`) and the request forwarded unchanged, so you can dry-run a policy. Enabling enforcement automatically starts the ledger even if `storage.enabled` is false, since enforcement reads from it. Spend-query failures **fail open** (the request is allowed) so a ledger hiccup never blocks a developer.
 

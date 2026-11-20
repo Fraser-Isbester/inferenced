@@ -15,6 +15,7 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/enforce"
 	"github.com/Fraser-Isbester/inferenced/internal/provider"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/anthropic"
+	"github.com/Fraser-Isbester/inferenced/internal/provider/bedrock"
 )
 
 func TestEnforce(t *testing.T) {
@@ -462,6 +463,38 @@ var _ = Describe("Middleware", func() {
 			Expect(called).To(BeTrue())
 			Expect(code).To(Equal(http.StatusOK))
 			Expect(body).To(ContainSubstring(`"model":"claude-opus-4-5"`))
+		})
+
+		It("forwards a SigV4-signed Bedrock request byte-for-byte instead of rewriting it, and still blocks it", func() {
+			const host = "bedrock-runtime.us-west-2.amazonaws.com"
+			const reqBody = `{"anthropic_version":"bedrock-2023-05-31","messages":[{"role":"user","content":"hi"}]}`
+			reg := provider.NewRegistry()
+			reg.Register(bedrock.New())
+			serve := func(spent float64) (*httptest.ResponseRecorder, string) {
+				var got string
+				inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					b, _ := io.ReadAll(r.Body)
+					got = string(b)
+				})
+				eng := enforce.NewEngine(tiered, func(string, string, time.Time) (float64, error) {
+					return spent, nil
+				}, fixedClock(now))
+				h := enforce.Middleware(eng, resolve, reg, enforce.ActionBlock, http.StatusPaymentRequired, rules)(inner)
+				req := httptest.NewRequest(http.MethodPost,
+					"https://"+host+"/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke", strings.NewReader(reqBody))
+				req.Host = host
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				return rec, got
+			}
+
+			// "sonnet" matches a rule, but rewriting would break the signature.
+			_, got := serve(9.0)
+			Expect(got).To(Equal(reqBody))
+
+			rec, _ := serve(12.0)
+			Expect(rec.Code).To(Equal(http.StatusPaymentRequired))
+			Expect(rec.Body.String()).To(ContainSubstring(`"__type":"AccessDeniedException"`))
 		})
 
 		It("forwards unchanged when no rule matches the model", func() {
