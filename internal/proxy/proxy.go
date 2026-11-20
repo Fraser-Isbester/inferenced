@@ -84,7 +84,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 			return
 		}
 
-		host := p.UpstreamHost()
+		host := provider.UpstreamHostFor(p, pr.In)
 		out.URL.Scheme = p.UpstreamScheme()
 		out.URL.Host = host
 		// Set both so the upstream sees the correct Host header.
@@ -182,7 +182,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		ev.Status = resp.StatusCode
 		logx.StreamStart(ev.RequestID)
 
-		parser := p.NewStreamParser(resp.Header.Get("Content-Type"))
+		parser := provider.StreamParserFor(p, resp.Request, resp.Header.Get("Content-Type"))
 
 		// io.Pipe is unbuffered: the observer goroutine below must continuously
 		// drain pr or writes to pw (driven by the client read path via TeeReader)

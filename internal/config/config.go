@@ -24,6 +24,7 @@ import (
 	"github.com/Fraser-Isbester/inferenced/internal/provider/ollama"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/openai"
 	"github.com/Fraser-Isbester/inferenced/internal/provider/openaicompat"
+	"github.com/Fraser-Isbester/inferenced/internal/provider/vertex"
 )
 
 // defaultListen is the address used when config omits one.
@@ -154,6 +155,7 @@ type Providers struct {
 	Anthropic Toggle       `yaml:"anthropic"`
 	OpenAI    Toggle       `yaml:"openai"`
 	Gemini    Toggle       `yaml:"gemini"`
+	Vertex    VertexToggle `yaml:"vertex"`
 	Ollama    OllamaToggle `yaml:"ollama"`
 
 	OpenAICompatible []CompatEntry `yaml:"openai_compatible"`
@@ -168,6 +170,14 @@ type Toggle struct {
 type OllamaToggle struct {
 	Enabled  *bool  `yaml:"enabled"`
 	Upstream string `yaml:"upstream"`
+}
+
+// VertexToggle is a Toggle plus an optional fixed upstream host. Leave Host
+// empty to route each request to the region named in its URL path; set it to
+// pin a Private Service Connect or other custom endpoint.
+type VertexToggle struct {
+	Enabled *bool  `yaml:"enabled"`
+	Host    string `yaml:"host"`
 }
 
 // CompatEntry defines one OpenAI-compatible endpoint.
@@ -256,6 +266,12 @@ func discover() (string, bool) {
 func (c *Config) Registry() *provider.Registry {
 	reg := provider.NewRegistry()
 
+	// Vertex goes first: Detect's Matches fallback runs in registration order,
+	// and anthropic (anthropic-version header) and gemini (":generateContent")
+	// would otherwise claim Vertex paths in env-override mode.
+	if enabled(c.Providers.Vertex.Enabled) {
+		reg.Register(vertex.NewWithHost(c.Providers.Vertex.Host))
+	}
 	if enabled(c.Providers.Anthropic.Enabled) {
 		reg.Register(anthropic.New())
 	}

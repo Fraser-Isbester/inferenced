@@ -77,6 +77,12 @@ export ANTHROPIC_BASE_URL="http://127.0.0.1:8766"
 claude "Write a hello world in Rust"
 ```
 
+Claude Code on Vertex AI (`CLAUDE_CODE_USE_VERTEX=1`) works the same way; the gateway forwards to the region in each request's path:
+
+```bash
+export ANTHROPIC_VERTEX_BASE_URL="http://127.0.0.1:8766/v1"
+```
+
 Or any OpenAI-compatible client:
 
 ```bash
@@ -99,8 +105,9 @@ The gateway prints a lifecycle line per request:
 | OpenAI | ✅ | Chat Completions, Responses, Embeddings — SSE + `usage` |
 | OpenAI-compatible (config) | ✅ | Azure OpenAI, OpenRouter, Groq, Together, Fireworks, vLLM, LM Studio, … — one config line each |
 | Google Gemini | ✅ | `generateContent`/`streamGenerateContent`, `usageMetadata` |
+| Google Vertex AI | ✅ | Gemini (`generateContent`), Claude (`rawPredict`), OpenAI-wire MaaS; routed by the region in the path; ADC bearer tokens pass through untouched |
 | Ollama (local) | ✅ | `/api/chat`, `/api/generate` (NDJSON), `$0` cost |
-| AWS Bedrock, GCP Vertex | 🔜 | need bespoke request signing (SigV4 / OAuth) |
+| AWS Bedrock | 🔜 | needs SigV4 handling |
 
 Built-in providers are a single file implementing the `Provider` interface plus a registry entry. Any endpoint that speaks the **OpenAI wire format** needs no code at all — add it under `providers.openai_compatible` in the config (see below). Browser-based inference (e.g. chatgpt.com) is out of scope.
 
@@ -181,7 +188,7 @@ enforcement:
 - **Period** is `day`, `month`, or `rolling`. `day` and `month` reset at the local calendar boundary; `rolling` sums spend over a trailing `window` (any Go duration, e.g. `168h`) and is **required** for rolling limits.
 - `limit_usd` is the reference budget. **Thresholds are fractions of it and fully per-limit**, so the policy is rule-based: `downgrade_at` (e.g. `0.8`) is where the model is down-scoped, `block_at` (e.g. `1.2`, default `1.0`) is where the request is blocked. Omitting `downgrade_at` means the limit only ever blocks.
 
-**Downgrade** (model failover): when a limit crosses `downgrade_at` (but is still under `block_at`), inferenced rewrites the request's model in-flight to the target of the first matching `downgrade` rule — the JSON `model` field for Anthropic/OpenAI/Ollama, or the URL path for Gemini — and forwards it. The downgraded request is metered under the cheaper model. Block always wins over downgrade, and a rewrite that can't be applied (no matching rule, parse error) forwards the request unchanged rather than dropping it.
+**Downgrade** (model failover): when a limit crosses `downgrade_at` (but is still under `block_at`), inferenced rewrites the request's model in-flight to the target of the first matching `downgrade` rule — the JSON `model` field for Anthropic/OpenAI/Ollama, or the URL path for Gemini and Vertex — and forwards it. The downgraded request is metered under the cheaper model. Block always wins over downgrade, and a rewrite that can't be applied (no matching rule, parse error) forwards the request unchanged rather than dropping it.
 
 **Block:** when a limit reaches `block_at` and `action: block`, the request is denied (never forwarded) with a **provider-shaped error envelope** so the calling client surfaces a native, non-retriable error. The status defaults to **402 Payment Required** (`block_status`), which coding agents read as a quota/billing stop — deliberately **not** 401/403 (Claude Code maps those to "run `/login`") or 429 (treated as retryable rate-limiting). The error type is mapped per provider for a 402 budget block (Anthropic `invalid_request_error`, OpenAI `insufficient_quota`, Gemini `FAILED_PRECONDITION`).
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Fraser-Isbester/inferenced/internal/config"
 	"github.com/Fraser-Isbester/inferenced/internal/enforce"
+	"github.com/Fraser-Isbester/inferenced/internal/provider"
 )
 
 func TestConfig(t *testing.T) {
@@ -31,6 +32,35 @@ var _ = Describe("Default", func() {
 		got, ok := reg.Detect(r)
 		Expect(ok).To(BeTrue())
 		Expect(got.Name()).To(Equal("anthropic"))
+	})
+
+	It("routes Vertex paths to vertex even though they also look like anthropic and gemini", func() {
+		reg := config.Default().Registry()
+		for _, path := range []string{
+			"/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5:streamRawPredict",
+			"/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent",
+		} {
+			r := httptest.NewRequest("POST", path, nil)
+			r.Header.Set("anthropic-version", "vertex-2023-10-16")
+			got, ok := reg.Detect(r)
+			Expect(ok).To(BeTrue(), path)
+			Expect(got.Name()).To(Equal("vertex"), path)
+		}
+	})
+})
+
+var _ = Describe("Vertex config", func() {
+	It("pins the upstream host when one is configured", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "inferenced.yaml")
+		Expect(os.WriteFile(path, []byte("providers:\n  vertex: { host: psc.example.internal }\n"), 0o600)).To(Succeed())
+		cfg, err := config.Load(path)
+		Expect(err).NotTo(HaveOccurred())
+
+		r := httptest.NewRequest("POST", "/v1/projects/p/locations/us-east5/publishers/anthropic/models/m:rawPredict", nil)
+		got, ok := cfg.Registry().Detect(r)
+		Expect(ok).To(BeTrue())
+		Expect(provider.UpstreamHostFor(got, r)).To(Equal("psc.example.internal"))
 	})
 })
 
