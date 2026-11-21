@@ -170,6 +170,9 @@ var _ = Describe("Proxy streaming invariants", func() {
 		})
 
 		const n = 40
+		// Deadline on Do and body reads so a stalled response fails the spec
+		// rather than blocking wg.Wait forever.
+		client := &http.Client{Timeout: 10 * time.Second}
 		var wg sync.WaitGroup
 		for i := 1; i <= n; i++ {
 			wg.Add(1)
@@ -180,10 +183,11 @@ var _ = Describe("Proxy streaming invariants", func() {
 					strings.NewReader(fmt.Sprintf(`{"model":"m-%d","stream":true}`, i)))
 				Expect(err).NotTo(HaveOccurred())
 				req.Header.Set("anthropic-version", "2023-06-01")
-				resp, err := http.DefaultClient.Do(req)
+				resp, err := client.Do(req)
 				Expect(err).NotTo(HaveOccurred())
-				_, _ = io.ReadAll(resp.Body)
-				_ = resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
+				_, err = io.ReadAll(resp.Body)
+				Expect(err).NotTo(HaveOccurred(), "truncated or timed-out response")
 			}(i)
 		}
 		wg.Wait()

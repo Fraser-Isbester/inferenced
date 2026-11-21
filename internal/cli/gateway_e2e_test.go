@@ -8,7 +8,9 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -89,6 +91,8 @@ func unitSheet() *pricing.Resolver {
 	}))
 }
 
+var testClient = &http.Client{Timeout: 10 * time.Second}
+
 type gatewayHarness struct {
 	gw        *gateway
 	srv       *httptest.Server
@@ -134,7 +138,9 @@ func (h *gatewayHarness) send(method, path, host string, headers map[string]stri
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// The deadline covers headers and the full body, so a stalled gateway
+	// fails the spec instead of hanging the suite.
+	resp, err := testClient.Do(req)
 	Expect(err).NotTo(HaveOccurred())
 	defer func() { _ = resp.Body.Close() }()
 	got, err := io.ReadAll(resp.Body)
@@ -161,15 +167,16 @@ func (h *gatewayHarness) rows(n int) []store.EventRow {
 
 // ledgerBytes returns the raw SQLite main + WAL file contents, so specs can
 // assert a secret never reached disk in any column or page.
+// A read failure must fail the spec, never shrink what is scanned: only an
+// absent WAL (checkpointed or never created) is tolerated.
 func (h *gatewayHarness) ledgerBytes() []byte {
-	var all []byte
-	for _, p := range []string{h.dbPath, h.dbPath + "-wal"} {
-		b, err := os.ReadFile(p)
-		if err == nil {
-			all = append(all, b...)
-		}
+	all, err := os.ReadFile(h.dbPath)
+	Expect(err).NotTo(HaveOccurred(), "main ledger file must be readable")
+	wal, err := os.ReadFile(h.dbPath + "-wal")
+	if !errors.Is(err, fs.ErrNotExist) {
+		Expect(err).NotTo(HaveOccurred(), "WAL exists but is unreadable")
 	}
-	return all
+	return append(all, wal...)
 }
 
 const (
