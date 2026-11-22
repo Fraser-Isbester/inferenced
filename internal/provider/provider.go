@@ -103,6 +103,15 @@ type HostMatcher interface {
 	MatchesHost(host string) bool
 }
 
+// BasePather is an optional capability for providers whose path-based Matches
+// is scoped under a base path (openai_compatible entries such as OpenRouter's
+// "/api/v1"). Detect tries these before unscoped providers, longest base path
+// first, since their match is strictly more specific than a bare wire-suffix
+// match and losing it would send the request's credential to another vendor.
+type BasePather interface {
+	BasePath() string
+}
+
 // UpstreamRouter is an optional capability for providers whose upstream host
 // depends on the request (Vertex AI routes by the region in the URL path). An
 // empty result falls back to UpstreamHost. Implementations must only ever
@@ -206,26 +215,54 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-// Detect resolves the provider for a request. It first tries Host-first
-// detection: if the request Host matches any provider's Hosts (or its
-// HostMatcher), that provider is returned. Otherwise it returns the first provider whose Matches reports true.
-// If neither succeeds it returns (nil, false).
+// Detect resolves the provider for a request. Host-first: a provider whose
+// Hosts contain the request Host verbatim (host:port included) wins, then one
+// whose Hosts or HostMatcher match the Host with its port stripped. Otherwise
+// path heuristics: base-path-scoped providers (BasePather), longest base path
+// first, then the first provider whose Matches reports true.
+// If nothing matches it returns (nil, false).
 func (r *Registry) Detect(req *http.Request) (Provider, bool) {
 	host := req.Host
 	if host == "" && req.URL != nil {
 		host = req.URL.Host
 	}
-	host = stripPort(host)
+	bare := stripPort(host)
 
+	// Exact host:port first, so "localhost:8000" isn't claimed by a provider
+	// registered for the bare "localhost".
+	if host != bare {
+		for _, p := range r.providers {
+			for _, h := range p.Hosts() {
+				if strings.EqualFold(host, h) {
+					return p, true
+				}
+			}
+		}
+	}
 	for _, p := range r.providers {
 		for _, h := range p.Hosts() {
-			if strings.EqualFold(host, h) {
+			if strings.EqualFold(bare, h) {
 				return p, true
 			}
 		}
-		if hm, ok := p.(HostMatcher); ok && hm.MatchesHost(host) {
+		if hm, ok := p.(HostMatcher); ok && hm.MatchesHost(bare) {
 			return p, true
 		}
+	}
+
+	var scoped Provider
+	longest := 0
+	for _, p := range r.providers {
+		bp, ok := p.(BasePather)
+		if !ok {
+			continue
+		}
+		if n := len(strings.TrimRight(bp.BasePath(), "/")); n > longest && p.Matches(req) {
+			scoped, longest = p, n
+		}
+	}
+	if scoped != nil {
+		return scoped, true
 	}
 
 	for _, p := range r.providers {

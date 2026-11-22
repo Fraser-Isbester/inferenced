@@ -88,10 +88,6 @@ var _ = Describe("Registry.Detect", func() {
 	})
 
 	It("selects a provider whose configured host includes a port via Host-first", func() {
-		Skip("BUG: Detect strips the port from the request Host but compares it " +
-			"against provider Hosts verbatim, so host:port entries (Ollama's " +
-			"localhost:11434, openai_compatible hosts like localhost:8000) never " +
-			"match Host-first and fall through to path heuristics.")
 		reg := provider.NewRegistry()
 		reg.Register(openai.New())
 		reg.Register(openaicompat.New(openaicompat.Config{Name: "vllm-local", Host: "localhost:8000", Scheme: "http"}))
@@ -99,6 +95,19 @@ var _ = Describe("Registry.Detect", func() {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		req.Host = "localhost:8000"
 		Expect(detect(reg, req)).To(Equal("vllm-local"))
+	})
+
+	It("prefers an exact host:port over a provider registered for the bare host", func() {
+		reg := provider.NewRegistry()
+		reg.Register(stub{name: "bare", hosts: []string{"localhost"}})
+		reg.Register(openaicompat.New(openaicompat.Config{Name: "vllm-local", Host: "localhost:8000", Scheme: "http"}))
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		req.Host = "localhost:8000"
+		Expect(detect(reg, req)).To(Equal("vllm-local"))
+
+		req.Host = "localhost:9000"
+		Expect(detect(reg, req)).To(Equal("bare"))
 	})
 })
 
@@ -142,15 +151,25 @@ var _ = Describe("built-in registry routing (env-override mode)", func() {
 	)
 
 	It("routes an openai_compatible base path to that provider, not to OpenAI", func() {
-		Skip("BUG: openai.Matches suffix-matches every OpenAI-wire path and is " +
-			"registered before openai_compatible entries, so in env-override mode " +
-			"/api/v1/chat/completions (OpenRouter) is detected as openai and forwarded " +
-			"to api.openai.com with the OpenRouter key. Compat entries are only " +
-			"reachable when the inbound Host equals their host.")
 		reg.Register(openaicompat.New(openaicompat.Config{Name: "openrouter", Host: "openrouter.ai", BasePath: "/api/v1"}))
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/completions", nil)
 		req.Host = "127.0.0.1:8766"
 		Expect(detect(reg, req)).To(Equal("openrouter"))
+	})
+
+	It("matches a base path only on a segment boundary", func() {
+		reg.Register(openaicompat.New(openaicompat.Config{Name: "openrouter", Host: "openrouter.ai", BasePath: "/api/v1"}))
+		req := httptest.NewRequest(http.MethodPost, "/api/v10/chat/completions", nil)
+		req.Host = "127.0.0.1:8766"
+		Expect(detect(reg, req)).To(Equal("openai"))
+	})
+
+	It("routes to the longest matching base path", func() {
+		reg.Register(openaicompat.New(openaicompat.Config{Name: "outer", Host: "a.example", BasePath: "/api"}))
+		reg.Register(openaicompat.New(openaicompat.Config{Name: "inner", Host: "b.example", BasePath: "/api/v1/"}))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/completions", nil)
+		req.Host = "127.0.0.1:8766"
+		Expect(detect(reg, req)).To(Equal("inner"))
 	})
 })
 
