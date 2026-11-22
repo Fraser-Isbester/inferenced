@@ -30,6 +30,7 @@ var providerAlias = map[string]string{
 	"google":                  "gemini",
 	"google-vertex":           "vertex",
 	"google-vertex-anthropic": "vertex",
+	"amazon-bedrock":          "bedrock",
 }
 
 // modelsDevDoc is the subset of the models.dev api.json shape we consume.

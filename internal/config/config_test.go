@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -61,6 +62,37 @@ var _ = Describe("Vertex config", func() {
 		got, ok := cfg.Registry().Detect(r)
 		Expect(ok).To(BeTrue())
 		Expect(provider.UpstreamHostFor(got, r)).To(Equal("psc.example.internal"))
+	})
+})
+
+var _ = Describe("Bedrock config", func() {
+	bedrockReq := func() *http.Request {
+		r := httptest.NewRequest("POST", "https://bedrock-runtime.eu-west-1.amazonaws.com/model/m/invoke", nil)
+		r.Host = "bedrock-runtime.eu-west-1.amazonaws.com"
+		return r
+	}
+
+	It("is on by default and detected by its Bedrock Runtime host", func() {
+		got, ok := config.Default().Registry().Detect(bedrockReq())
+		Expect(ok).To(BeTrue())
+		Expect(got.Name()).To(Equal("bedrock"))
+	})
+
+	It("uses the configured region when the host names none, and can be disabled", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "inferenced.yaml")
+		Expect(os.WriteFile(path, []byte("providers:\n  bedrock: { region: ap-southeast-2 }\n"), 0o600)).To(Succeed())
+		cfg, err := config.Load(path)
+		Expect(err).NotTo(HaveOccurred())
+		got, ok := cfg.Registry().Detect(bedrockReq())
+		Expect(ok).To(BeTrue())
+		Expect(got.UpstreamHost()).To(Equal("bedrock-runtime.ap-southeast-2.amazonaws.com"))
+
+		Expect(os.WriteFile(path, []byte("providers:\n  bedrock: { enabled: false }\n"), 0o600)).To(Succeed())
+		cfg, err = config.Load(path)
+		Expect(err).NotTo(HaveOccurred())
+		_, ok = cfg.Registry().Detect(bedrockReq())
+		Expect(ok).To(BeFalse())
 	})
 })
 

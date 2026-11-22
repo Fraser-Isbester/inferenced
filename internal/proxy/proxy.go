@@ -6,12 +6,14 @@ package proxy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -96,7 +98,18 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		// parser cannot read — yielding OutputTokens=0. Removing it lets the
 		// Transport advertise gzip and transparently decompress, so the observer
 		// (and the client) see plain text. Bandwidth is irrelevant on localhost.
-		out.Header.Del("Accept-Encoding")
+		// A SigV4-signed request (Bedrock) that signed the header keeps it, since
+		// removing a signed header fails the signature.
+		if !sigV4Signs(out.Header, "accept-encoding") {
+			out.Header.Del("Accept-Encoding")
+		}
+		// Rewrite drops inbound X-Forwarded-* headers; restore any the client
+		// signed, or the signature fails.
+		for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+			if v, ok := pr.In.Header[h]; ok && sigV4Signs(out.Header, strings.ToLower(h)) {
+				out.Header[h] = v
+			}
+		}
 
 		// Read and restore the body so ParseRequest can inspect it while the
 		// forwarded request still carries a replayable body.
@@ -119,7 +132,7 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 
 		info := p.ParseRequest(out, body)
 
-		cred := identity.Credential(out)
+		cred := provider.CredentialFor(p, out)
 		devID := opts.DeveloperID
 		if devID == "" {
 			devID = identity.DeveloperID(cred)
@@ -193,7 +206,9 @@ func New(reg *provider.Registry, sink telemetry.Sink, opts Options) *httputil.Re
 		go func() {
 			// Drain the tee'd bytes into the parser. io.Copy returns when the
 			// writer closes pw (normal EOF) or the pipe is broken.
-			_, _ = io.Copy(parser, pr)
+			_, _ = io.Copy(parser, observed(pr, resp.Header.Get("Content-Encoding")))
+			// Drain whatever a failed decode left, or the client stalls on pw.
+			_, _ = io.Copy(io.Discard, pr)
 
 			u := parser.Finish()
 			// Prefer the parser's authoritative input count; otherwise keep the
@@ -304,4 +319,40 @@ func (t *teeBody) Close() error {
 	// Closing the writer signals EOF to the observer's io.Copy(parser, pr).
 	_ = t.pw.Close()
 	return err
+}
+
+// observed returns the observer's view of the response body. The Transport
+// decompresses only when it chose the encoding itself; a client-signed
+// Accept-Encoding (Bedrock) stays, so a gzip body arrives here compressed and
+// is decoded for the parser alone, leaving the client's bytes untouched.
+func observed(r io.Reader, contentEncoding string) io.Reader {
+	if !strings.EqualFold(strings.TrimSpace(contentEncoding), "gzip") {
+		return r
+	}
+	zr, err := gzip.NewReader(r)
+	if err != nil {
+		return r
+	}
+	return zr
+}
+
+// sigV4Signs reports whether h carries an AWS SigV4 Authorization whose
+// SignedHeaders list includes name (lower-case).
+func sigV4Signs(h http.Header, name string) bool {
+	auth := h.Get("Authorization")
+	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 ") {
+		return false
+	}
+	for _, part := range strings.Split(auth[len("AWS4-HMAC-SHA256 "):], ",") {
+		list, ok := strings.CutPrefix(strings.TrimSpace(part), "SignedHeaders=")
+		if !ok {
+			continue
+		}
+		for _, hdr := range strings.Split(list, ";") {
+			if hdr == name {
+				return true
+			}
+		}
+	}
+	return false
 }
