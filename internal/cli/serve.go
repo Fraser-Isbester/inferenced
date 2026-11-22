@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"os/signal"
 	"strings"
@@ -105,20 +106,6 @@ func runServe(configPath, port string) {
 
 	resolver := buildPriceResolver(cfg)
 
-	// Unattributed traffic is bucketed under a default team so it always has a
-	// home in reporting and can be governed by a team rule.
-	team := cfg.Developer.Team
-	if team == "" {
-		team = "unknown"
-	}
-
-	sink := telemetry.MultiSink(sinks...)
-	rp := proxy.New(reg, sink, proxy.Options{
-		DeveloperID: cfg.Developer.ID,
-		Team:        team,
-		Pricing:     resolver,
-	})
-
 	// spendFn is the enforcement engine's spend source. When storage is off it
 	// returns 0, so any live-enabled enforcement is a no-op (warned below).
 	spendFn := func(scope, id string, since time.Time) (float64, error) { return 0, nil }
@@ -128,37 +115,15 @@ func runServe(configPath, port string) {
 	if cfg.Enforcement.Enabled && st == nil {
 		log.Printf("enforcement is enabled but storage is off; spend can't be measured (no-op) — enable storage")
 	}
-	resolve := func(r *http.Request) (string, string) {
-		if cfg.Developer.ID != "" {
-			return cfg.Developer.ID, team
-		}
-		// The same credential the proxy meters by, so limits match the ledger.
-		cred := identity.Credential(r)
-		if p, ok := reg.Detect(r); ok {
-			cred = provider.CredentialFor(p, r)
-		}
-		return identity.DeveloperID(cred), team
-	}
 
-	initial, err := buildRuleset(cfg, spendFn)
+	gw, err := newGateway(cfg, telemetry.MultiSink(sinks...), spendFn, resolver)
 	if err != nil {
 		log.Fatalf("enforcement: %v", err)
 	}
-	var current atomic.Pointer[enforce.Ruleset]
-	current.Store(&initial)
-
-	// Enforcement is always installed; a disabled config just allows everything,
-	// and a config edit can flip it on live via the watcher below.
-	handler := enforce.DynamicMiddleware(resolve, reg, func() enforce.Ruleset {
-		return *current.Load()
-	})(http.Handler(rp))
-	// Reject undetected traffic outermost, before enforcement or metering, so a
-	// stray/non-inference request 404s instead of being spend-checked or dialed.
-	handler = proxy.Gate(reg)(handler)
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: gw.handler,
 	}
 
 	// Cancel the context on SIGINT/SIGTERM to trigger graceful shutdown.
@@ -176,7 +141,7 @@ func runServe(configPath, port string) {
 			log.Printf("config reload rejected (%s): %v", cfgPath, err)
 			return
 		}
-		current.Store(&rs)
+		gw.rules.Store(&rs)
 		log.Printf("config reloaded from %s", cfgPath)
 	})
 
@@ -249,4 +214,66 @@ func buildPriceResolver(cfg *config.Config) *pricing.Resolver {
 
 	layers = append(layers, pricing.Default())
 	return pricing.NewResolver(layers...)
+}
+
+// gateway is the composed request path (Gate -> enforcement -> metering proxy)
+// built from config, independent of process lifecycle (listener, signals,
+// config watching). It exists so the full serve wiring can be exercised
+// in-process by tests without log.Fatalf or a real port.
+type gateway struct {
+	handler http.Handler
+	// proxy is the innermost reverse proxy; tests swap its Transport to land
+	// upstream dials on a local fake.
+	proxy *httputil.ReverseProxy
+	// rules is the live enforcement ruleset; the config watcher swaps it.
+	rules *atomic.Pointer[enforce.Ruleset]
+}
+
+// newGateway composes the serve handler chain. Ordering is load-bearing:
+// Gate is outermost so stray/non-inference requests 404 before they are
+// spend-checked or dialed; enforcement precedes the proxy so a downgrade
+// rewrite is what gets metered and forwarded.
+func newGateway(cfg *config.Config, sink telemetry.Sink, spend enforce.SpendFunc, resolver *pricing.Resolver) (*gateway, error) {
+	reg := cfg.Registry()
+
+	// Unattributed traffic is bucketed under a default team so it always has a
+	// home in reporting and can be governed by a team rule.
+	team := cfg.Developer.Team
+	if team == "" {
+		team = "unknown"
+	}
+
+	rp := proxy.New(reg, sink, proxy.Options{
+		DeveloperID: cfg.Developer.ID,
+		Team:        team,
+		Pricing:     resolver,
+	})
+
+	resolve := func(r *http.Request) (string, string) {
+		if cfg.Developer.ID != "" {
+			return cfg.Developer.ID, team
+		}
+		// The same credential the proxy meters by, so limits match the ledger.
+		cred := identity.Credential(r)
+		if p, ok := reg.Detect(r); ok {
+			cred = provider.CredentialFor(p, r)
+		}
+		return identity.DeveloperID(cred), team
+	}
+
+	initial, err := buildRuleset(cfg, spend)
+	if err != nil {
+		return nil, err
+	}
+	current := &atomic.Pointer[enforce.Ruleset]{}
+	current.Store(&initial)
+
+	// Enforcement is always installed; a disabled config just allows everything,
+	// and a config edit can flip it on live via the watcher.
+	handler := enforce.DynamicMiddleware(resolve, reg, func() enforce.Ruleset {
+		return *current.Load()
+	})(http.Handler(rp))
+	handler = proxy.Gate(reg)(handler)
+
+	return &gateway{handler: handler, proxy: rp, rules: current}, nil
 }
