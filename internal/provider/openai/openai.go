@@ -52,6 +52,10 @@ func (openaiProvider) Matches(r *http.Request) bool {
 		strings.HasSuffix(p, "/embeddings")
 }
 
+// BasePath is empty: OpenAI's suffix match is unscoped, so a base-path-scoped
+// openai_compatible match outranks it. See provider.BasePather.
+func (openaiProvider) BasePath() string { return "" }
+
 // ParseRequest extracts request metadata via the shared OpenAI wire parser.
 func (openaiProvider) ParseRequest(r *http.Request, body []byte) provider.RequestInfo {
 	return openaiwire.ParseRequest(r, body)

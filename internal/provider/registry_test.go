@@ -164,6 +164,26 @@ var _ = Describe("built-in registry routing (env-override mode)", func() {
 		Expect(detect(reg, req)).To(Equal("openai"))
 	})
 
+	It("keeps Vertex's structured route over a compatible /v1 base path", func() {
+		reg.Register(openaicompat.New(openaicompat.Config{Name: "compat-v1", Host: "c.example", BasePath: "/v1"}))
+		req := httptest.NewRequest(http.MethodPost, "/v1/projects/p1/locations/us-central1/endpoints/openapi/chat/completions", nil)
+		req.Host = "127.0.0.1:8766"
+		Expect(detect(reg, req)).To(Equal("vertex"))
+
+		req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		req.Host = "127.0.0.1:8766"
+		Expect(detect(reg, req)).To(Equal("compat-v1"))
+	})
+
+	It("routes to the longest matching base path even without OpenAI registered", func() {
+		reg := provider.NewRegistry()
+		reg.Register(openaicompat.New(openaicompat.Config{Name: "outer", Host: "a.example", BasePath: "/api"}))
+		reg.Register(openaicompat.New(openaicompat.Config{Name: "inner", Host: "b.example", BasePath: "/api/v1"}))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/completions", nil)
+		req.Host = "127.0.0.1:8766"
+		Expect(detect(reg, req)).To(Equal("inner"))
+	})
+
 	It("routes to the longest matching base path", func() {
 		reg.Register(openaicompat.New(openaicompat.Config{Name: "outer", Host: "a.example", BasePath: "/api"}))
 		reg.Register(openaicompat.New(openaicompat.Config{Name: "inner", Host: "b.example", BasePath: "/api/v1/"}))

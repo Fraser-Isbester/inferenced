@@ -103,11 +103,13 @@ type HostMatcher interface {
 	MatchesHost(host string) bool
 }
 
-// BasePather is an optional capability for providers whose path-based Matches
-// is scoped under a base path (openai_compatible entries such as OpenRouter's
-// "/api/v1"). Detect tries these before unscoped providers, longest base path
-// first, since their match is strictly more specific than a bare wire-suffix
-// match and losing it would send the request's credential to another vendor.
+// BasePather is implemented by providers whose path-based Matches is a bare
+// OpenAI-wire suffix check, optionally scoped under a base path (OpenAI itself
+// returns ""; openai_compatible entries such as OpenRouter return "/api/v1").
+// When the first path match is one of these, Detect prefers the matching one
+// with the longest base path, since losing it would send the request's
+// credential to another vendor. Structured routes (Vertex, Bedrock) keep their
+// registration-order precedence.
 type BasePather interface {
 	BasePath() string
 }
@@ -218,8 +220,8 @@ func (r *Registry) Names() []string {
 // Detect resolves the provider for a request. Host-first: a provider whose
 // Hosts contain the request Host verbatim (host:port included) wins, then one
 // whose Hosts or HostMatcher match the Host with its port stripped. Otherwise
-// path heuristics: base-path-scoped providers (BasePather), longest base path
-// first, then the first provider whose Matches reports true.
+// path heuristics in registration order, except that an unscoped OpenAI-wire
+// match yields to a base-path-scoped one (see BasePather).
 // If nothing matches it returns (nil, false).
 func (r *Registry) Detect(req *http.Request) (Provider, bool) {
 	host := req.Host
@@ -250,29 +252,38 @@ func (r *Registry) Detect(req *http.Request) (Provider, bool) {
 		}
 	}
 
-	var scoped Provider
-	longest := 0
 	for _, p := range r.providers {
-		bp, ok := p.(BasePather)
-		if !ok {
+		if !p.Matches(req) {
 			continue
 		}
-		if n := len(strings.TrimRight(bp.BasePath(), "/")); n > longest && p.Matches(req) {
-			scoped, longest = p, n
+		// An OpenAI-wire match yields to the most specific scoped one.
+		if _, ok := p.(BasePather); ok {
+			if scoped := r.longestScoped(req); scoped != nil {
+				return scoped, true
+			}
 		}
-	}
-	if scoped != nil {
-		return scoped, true
-	}
-
-	for _, p := range r.providers {
-		if p.Matches(req) {
-			return p, true
-		}
+		return p, true
 	}
 
 	return nil, false
 }
+
+// longestScoped returns the matching provider with the longest non-empty base
+// path, or nil.
+func (r *Registry) longestScoped(req *http.Request) Provider {
+	var best Provider
+	longest := 0
+	for _, p := range r.providers {
+		if bp, ok := p.(BasePather); ok {
+			if n := scope(bp); n > longest && p.Matches(req) {
+				best, longest = p, n
+			}
+		}
+	}
+	return best
+}
+
+func scope(bp BasePather) int { return len(strings.TrimRight(bp.BasePath(), "/")) }
 
 // stripPort removes a trailing ":port" from a host, if present.
 func stripPort(host string) string {
