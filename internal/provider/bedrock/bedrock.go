@@ -405,16 +405,17 @@ type usage struct {
 	have    bool
 	final   bool
 	chars   int
-	// provisional: out so far is only Anthropic message_start's placeholder,
-	// so a stream cut there under-reports what was generated.
-	provisional bool
+	// reported: a wire count for output arrived (explicit zero included).
+	// Without one, out is at most message_start's placeholder, and a stream
+	// cut before its counts under-reports what was generated.
+	reported bool
 }
 
 type counts struct {
-	InputTokens  int `json:"inputTokens"`   // Converse
-	OutputTokens int `json:"outputTokens"`  // Converse
-	InputSnake   int `json:"input_tokens"`  // Anthropic
-	OutputSnake  int `json:"output_tokens"` // Anthropic
+	InputTokens  int  `json:"inputTokens"`   // Converse
+	OutputTokens *int `json:"outputTokens"`  // Converse
+	InputSnake   int  `json:"input_tokens"`  // Anthropic
+	OutputSnake  *int `json:"output_tokens"` // Anthropic
 }
 
 type payload struct {
@@ -429,8 +430,8 @@ type payload struct {
 	Message *struct {
 		Usage *counts `json:"usage"`
 	} `json:"message"` // Anthropic message_start
-	PromptTokens int `json:"prompt_token_count"`     // Llama
-	GenTokens    int `json:"generation_token_count"` // Llama, cumulative
+	PromptTokens int  `json:"prompt_token_count"`     // Llama
+	GenTokens    *int `json:"generation_token_count"` // Llama, cumulative; null until reported
 	Delta        *struct {
 		Text        string `json:"text"`
 		PartialJSON string `json:"partial_json"` // Anthropic tool_use input
@@ -444,14 +445,17 @@ type payload struct {
 	Metadata          *payload `json:"metadata"`
 	// Titan Text: inputTextTokenCount on the response or first chunk; output
 	// as per-result counts (non-stream) or a running total (stream).
-	TitanIn      int `json:"inputTextTokenCount"`
-	TitanOutRun  int `json:"totalOutputTextTokenCount"`
+	TitanIn      int  `json:"inputTextTokenCount"`
+	TitanOutRun  *int `json:"totalOutputTextTokenCount"`
 	TitanResults []struct {
-		TokenCount int    `json:"tokenCount"`
+		TokenCount *int   `json:"tokenCount"`
 		OutputText string `json:"outputText"`
 	} `json:"results"`
 	OutputText string `json:"outputText"` // Titan stream
 	Completion string `json:"completion"` // Claude Text Completions
+	Outputs    []struct {
+		Text string `json:"text"`
+	} `json:"outputs"` // Mistral; carries no token counts
 }
 
 func (u *usage) fold(b []byte) {
@@ -478,9 +482,12 @@ func (u *usage) foldPayload(p payload) {
 		}
 	}
 	u.chars += len(p.Generation) + len(p.OutputText) + len(p.Completion)
+	for _, o := range p.Outputs {
+		u.chars += len(o.Text)
+	}
 	titanOut := p.TitanOutRun
 	for _, r := range p.TitanResults {
-		titanOut += r.TokenCount
+		titanOut = sum(titanOut, r.TokenCount)
 		u.chars += len(r.OutputText)
 	}
 	if m := p.Metrics; m != nil {
@@ -491,23 +498,50 @@ func (u *usage) foldPayload(p payload) {
 		return
 	}
 	if c := messageUsage(p); c != nil {
-		u.set(max(c.InputTokens, c.InputSnake), max(c.OutputTokens, c.OutputSnake))
-		u.provisional = true
+		// message_start's output is a placeholder, not a report.
+		u.set(max(c.InputTokens, c.InputSnake), deref(either(c.OutputTokens, c.OutputSnake)))
 	}
 	if c := p.Usage; c != nil {
-		u.setOut(max(c.InputTokens, c.InputSnake), max(c.OutputTokens, c.OutputSnake))
+		u.setOut(max(c.InputTokens, c.InputSnake), either(c.OutputTokens, c.OutputSnake))
 	}
 	u.setOut(p.PromptTokens, p.GenTokens)
 	u.setOut(p.TitanIn, titanOut)
 }
 
-// setOut records counts whose output, when present, is reported rather than
-// a placeholder.
-func (u *usage) setOut(in, out int) {
-	u.set(in, out)
-	if out > 0 {
-		u.provisional = false
+// setOut records counts whose output, when present (zero included), is
+// reported rather than a placeholder. Streamed counts are cumulative.
+func (u *usage) setOut(in int, out *int) {
+	u.set(in, 0)
+	if out != nil {
+		u.out, u.have, u.reported = *out, true, true
 	}
+}
+
+// sum adds present counts; nil when neither is present.
+func sum(a, b *int) *int {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	n := *a + *b
+	return &n
+}
+
+// either picks the larger present count of two spellings of one field.
+func either(a, b *int) *int {
+	if a == nil || (b != nil && *b > *a) {
+		return b
+	}
+	return a
+}
+
+func deref(n *int) int {
+	if n == nil {
+		return 0
+	}
+	return *n
 }
 
 func messageUsage(p payload) *counts {
@@ -532,7 +566,7 @@ func (u *usage) result() provider.Usage {
 	if u.have {
 		// A stream cut before its final counts still produced the text seen
 		// so far; don't bill less than that.
-		if u.provisional && !u.final && u.chars/4 > u.out {
+		if !u.reported && !u.final && u.chars/4 > u.out {
 			return provider.Usage{InputTokens: u.in, OutputTokens: u.chars / 4, Approximated: true}
 		}
 		return provider.Usage{InputTokens: u.in, OutputTokens: u.out}

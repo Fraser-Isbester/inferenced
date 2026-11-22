@@ -164,6 +164,21 @@ var _ = Describe("Bedrock provider", func() {
 			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 10, Approximated: true}))
 		})
 
+		It("approximates output from generated text when a Llama stream is cut before its generation count", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"generation":"`+strings.Repeat("x", 20)+`","prompt_token_count":20,"generation_token_count":null}`),
+				bedrocktest.Chunk(`{"generation":"`+strings.Repeat("x", 20)+`","prompt_token_count":null,"generation_token_count":null}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 10, Approximated: true}))
+		})
+
+		It("keeps an explicit zero generation count rather than estimating", func() {
+			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
+				bedrocktest.Chunk(`{"generation":"","prompt_token_count":20,"generation_token_count":0}`),
+			)
+			Expect(u).To(Equal(provider.Usage{InputTokens: 20, OutputTokens: 0}))
+		})
+
 		It("keeps invocation metrics even below the text estimate after a message_start", func() {
 			u := feed(p.NewStreamParser("application/vnd.amazon.eventstream"),
 				bedrocktest.Chunk(`{"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":1}}}`),
@@ -280,6 +295,8 @@ var _ = Describe("Bedrock provider", func() {
 				provider.Usage{InputTokens: 9, OutputTokens: 7}),
 			Entry("InvokeModel, Claude Text Completions", `{"completion":"abcdefgh","stop_reason":"stop_sequence"}`,
 				provider.Usage{OutputTokens: 2, Approximated: true}),
+			Entry("InvokeModel, Mistral", `{"outputs":[{"text":"abcdefgh","stop_reason":"stop"},{"text":"ijkl"}]}`,
+				provider.Usage{OutputTokens: 3, Approximated: true}),
 			Entry("unrecognized", `{"answer":"abcdefgh"}`, provider.Usage{Approximated: true}),
 		)
 	})
