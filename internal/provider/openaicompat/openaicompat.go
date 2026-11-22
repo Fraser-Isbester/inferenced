@@ -63,6 +63,9 @@ func (p compatProvider) UpstreamScheme() string { return p.cfg.Scheme }
 // Hosts returns the configured host for Host-first detection.
 func (p compatProvider) Hosts() []string { return []string{p.cfg.Host} }
 
+// BasePath scopes path-based detection; see provider.BasePather.
+func (p compatProvider) BasePath() string { return p.cfg.BasePath }
+
 // Matches reports whether the request path looks like an OpenAI-style endpoint,
 // optionally scoped to the configured base path.
 func (p compatProvider) Matches(r *http.Request) bool {
@@ -70,7 +73,7 @@ func (p compatProvider) Matches(r *http.Request) bool {
 		return false
 	}
 	path := r.URL.Path
-	if p.cfg.BasePath != "" && !strings.HasPrefix(path, p.cfg.BasePath) {
+	if bp := strings.TrimRight(p.cfg.BasePath, "/"); bp != "" && path != bp && !strings.HasPrefix(path, bp+"/") {
 		return false
 	}
 	return strings.HasSuffix(path, "/chat/completions") ||
